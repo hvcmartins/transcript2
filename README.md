@@ -3,7 +3,7 @@
 A **TurboScribe-inspired transcription app** powered by [Groq](https://groq.com) Whisper.  
 Drag-and-drop audio or video files and get accurate, timestamped transcriptions in seconds — **no GPU required**.
 
-![Node.js](https://img.shields.io/badge/Node.js-24-green) ![Docker](https://img.shields.io/badge/Docker-ready-blue) ![Groq](https://img.shields.io/badge/Groq-Whisper-purple) ![Port](https://img.shields.io/badge/Port-6133-orange) ![Unraid](https://img.shields.io/badge/Unraid-7.2.2-red)
+![Node.js](https://img.shields.io/badge/Node.js-20_LTS-green) ![Docker](https://img.shields.io/badge/Docker-ready-blue) ![Groq](https://img.shields.io/badge/Groq-Whisper-purple) ![Port](https://img.shields.io/badge/Port-6133-orange) ![Unraid](https://img.shields.io/badge/Unraid-7.2.2-red)
 
 ---
 
@@ -245,14 +245,14 @@ rdtlTranscript/
 │   └── exports.js             # TXT, SRT, VTT, TSV, JSON export
 ├── services/
 │   ├── groq.js                # Groq Whisper API wrapper
-│   └── database.js            # SQLite via node:sqlite (built into Node.js 24)
+│   └── database.js            # SQLite via better-sqlite3
 ├── middleware/
 │   └── upload.js              # Multer file upload + validation
 ├── public/                    # Vanilla JS frontend (no build step)
 │   ├── index.html
 │   ├── css/style.css
 │   └── js/app.js
-├── Dockerfile                 # Node.js 24 Alpine, port 6133
+├── Dockerfile                 # Node.js 20 LTS Alpine, port 6133
 ├── docker-compose.yml
 ├── unraid-template.xml        # Unraid Community Applications template
 └── .env.example

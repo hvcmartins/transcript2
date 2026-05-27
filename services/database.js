@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
@@ -13,10 +13,9 @@ const dbPath = join(dbDir, 'rdtlTranscript.db');
 let db;
 
 export function initDatabase() {
-  db = new DatabaseSync(dbPath);
-  // node:sqlite uses exec() for PRAGMAs (no .pragma() method)
-  db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA foreign_keys = ON');
+  db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS transcriptions (
