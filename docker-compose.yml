@@ -8,29 +8,22 @@ services:
     restart: unless-stopped
 
     ports:
-      - "3000:3000"          # Change left side to use a different host port
+      - "3005:3000"        # Change 3005 to any free port on your server
 
     environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_API_KEY=gIsuzbde73TXpxumEGJDFkZZ01S77hO5eLB79w/D/9s=
       - PORT=3000
       - HOST=0.0.0.0
       - UPLOAD_DIR=/app/uploads
       - DATA_DIR=/app/data
 
     volumes:
-      - transcribify_uploads:/app/uploads
-      - transcribify_data:/app/data
-      # Alternatively, use bind mounts for easier access:
-      # - ./data/uploads:/app/uploads
-      # - ./data/db:/app/data
+      - /mnt/user/appdata/transcribify/uploads:/app/uploads
+      - /mnt/user/appdata/transcribify/data:/app/data
 
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-
-volumes:
-  transcribify_uploads:
-  transcribify_data:
+      start_period: 15s
