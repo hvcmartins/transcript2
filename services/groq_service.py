@@ -83,21 +83,25 @@ def transcribe_file(
             **params,
         )
 
-    # Convert Pydantic/SDK objects → plain dicts for JSON serialisation
+    # Convert Pydantic/SDK objects → plain dicts for JSON serialisation.
+    # Newer Groq SDK versions may return dicts directly; older ones return objects.
+    def _get(obj, key, default=None):
+        return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
     segments = []
     for seg in response.segments or []:
         segments.append({
-            "start": seg.start,
-            "end":   seg.end,
-            "text":  seg.text,
+            "start": _get(seg, "start", 0),
+            "end":   _get(seg, "end",   0),
+            "text":  _get(seg, "text",  ""),
         })
 
     words = []
     for w in getattr(response, "words", None) or []:
         words.append({
-            "word":  w.word,
-            "start": w.start,
-            "end":   w.end,
+            "word":  _get(w, "word",  ""),
+            "start": _get(w, "start", 0),
+            "end":   _get(w, "end",   0),
         })
 
     return {
