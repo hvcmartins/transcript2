@@ -20,13 +20,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Optional: OpenVINO GenAI + Intel GPU OpenCL runtime for Intel GPU transcription
+# Optional: OpenVINO GenAI + Intel GPU drivers (Level Zero + OpenCL) for iGPU transcription
+# Installs from Intel's official GPU repository — supports Gen9 through Gen12+ (UHD 730, Arc, etc.)
 RUN if [ "$WITH_OPENVINO" = "true" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends curl gpg ca-certificates && \
+      curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key \
+        | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg && \
+      echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] \
+        https://repositories.intel.com/gpu/ubuntu jammy client" \
+        > /etc/apt/sources.list.d/intel-gpu.list && \
       apt-get update && apt-get install -y --no-install-recommends \
         intel-opencl-icd \
+        intel-level-zero-gpu \
+        level-zero \
         ocl-icd-libopencl1 \
         libegl1 \
-      && rm -rf /var/lib/apt/lists/*; \
+      && rm -rf /var/lib/apt/lists/* && \
       pip install --no-cache-dir openvino-genai; \
     fi
 
