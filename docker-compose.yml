@@ -21,7 +21,7 @@ services:
       - LOCAL_DEVICE=cpu           # cpu | cuda (no Intel iGPU support in ctranslate2)
       - LOCAL_COMPUTE_TYPE=int8    # int8 = fastest on Intel CPUs with AVX2
       # OpenVINO Intel GPU engine (requires image built with --build-arg WITH_OPENVINO=true)
-      - OPENVINO_DEVICE=GPU        # GPU | CPU | AUTO
+      - OPENVINO_DEVICE=AUTO       # AUTO (picks GPU if drivers present, else CPU) | GPU | CPU
 
     volumes:
       - /mnt/user/appdata/rdtlTranscript/uploads:/app/uploads
