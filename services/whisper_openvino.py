@@ -1,9 +1,8 @@
 """
 Intel GPU transcription via optimum-intel + OpenVINO.
 
-Uses pre-converted Whisper INT8 models from HuggingFace (OpenVINO/* org).
-These models were created with optimum-intel and must be loaded with it —
-openvino-genai's WhisperPipeline is incompatible with this format.
+Uses model.generate() directly as recommended by transformers for Whisper —
+the pipeline abstraction doesn't handle seq2seq chunking correctly.
 
 Requirements: pip install optimum[openvino] transformers
 Build with Dockerfile.openvino (Ubuntu 24.04 + Intel GPU drivers).
@@ -14,6 +13,7 @@ Environment variables:
 """
 
 import os
+import re
 from pathlib import Path
 
 MODELS_DIR      = Path(os.getenv("MODELS_DIR", "models"))
@@ -22,15 +22,15 @@ OPENVINO_DEVICE = os.getenv("OPENVINO_DEVICE", "AUTO")
 _HF_CACHE = MODELS_DIR / "openvino_hf"
 
 SUPPORTED_OV_MODELS = [
-    {"id": "tiny",           "hf_id": "OpenVINO/whisper-tiny-int8-ov",               "label": "Tiny — ~40 MB · fastest"},
-    {"id": "base",           "hf_id": "OpenVINO/whisper-base-int8-ov",               "label": "Base — ~80 MB · fast"},
-    {"id": "small",          "hf_id": "OpenVINO/whisper-small-int8-ov",              "label": "Small — ~240 MB · balanced ✓"},
-    {"id": "medium",         "hf_id": "OpenVINO/whisper-medium-int8-ov",             "label": "Medium — ~780 MB · accurate"},
-    {"id": "large-v3-turbo", "hf_id": "OpenVINO/whisper-large-v3-turbo-int8-ov",    "label": "Large v3 Turbo — ~900 MB · fast+accurate"},
-    {"id": "large-v3",       "hf_id": "OpenVINO/whisper-large-v3-int8-ov",          "label": "Large v3 — ~1.6 GB · best"},
+    {"id": "tiny",           "hf_id": "OpenVINO/whisper-tiny-int8-ov",            "label": "Tiny — ~40 MB · fastest"},
+    {"id": "base",           "hf_id": "OpenVINO/whisper-base-int8-ov",            "label": "Base — ~80 MB · fast"},
+    {"id": "small",          "hf_id": "OpenVINO/whisper-small-int8-ov",           "label": "Small — ~240 MB · balanced ✓"},
+    {"id": "medium",         "hf_id": "OpenVINO/whisper-medium-int8-ov",          "label": "Medium — ~780 MB · accurate"},
+    {"id": "large-v3-turbo", "hf_id": "OpenVINO/whisper-large-v3-turbo-int8-ov", "label": "Large v3 Turbo — ~900 MB · fast+accurate"},
+    {"id": "large-v3",       "hf_id": "OpenVINO/whisper-large-v3-int8-ov",       "label": "Large v3 — ~1.6 GB · best"},
 ]
 
-_pipeline_cache: dict = {}
+_model_cache: dict = {}
 
 
 def _hf_id(model_id: str) -> str:
@@ -52,17 +52,17 @@ OPENVINO_AVAILABLE = _is_available()
 
 
 def is_ov_model_cached(model_id: str) -> bool:
-    hf_id = _hf_id(model_id)
-    cache_name = "models--" + hf_id.replace("/", "--")
+    cache_name = "models--" + _hf_id(model_id).replace("/", "--")
     model_dir = _HF_CACHE / cache_name
     return model_dir.exists() and any(model_dir.iterdir())
 
 
-def _get_pipeline(model_id: str):
-    global _pipeline_cache
-    if model_id not in _pipeline_cache:
+def _load(model_id: str):
+    """Load and cache (model, processor) pair."""
+    global _model_cache
+    if model_id not in _model_cache:
         from optimum.intel import OVModelForSpeechSeq2Seq
-        from transformers import AutoProcessor, pipeline as hf_pipeline
+        from transformers import AutoProcessor
 
         hf_id = _hf_id(model_id)
         _HF_CACHE.mkdir(parents=True, exist_ok=True)
@@ -76,15 +76,13 @@ def _get_pipeline(model_id: str):
             hf_id,
             cache_dir=str(_HF_CACHE),
         )
-        _pipeline_cache[model_id] = hf_pipeline(
-            "automatic-speech-recognition",
-            model=model,
-            tokenizer=processor.tokenizer,
-            feature_extractor=processor.feature_extractor,
-            max_new_tokens=448,
-            return_timestamps=True,
-        )
-    return _pipeline_cache[model_id]
+        _model_cache[model_id] = (model, processor)
+    return _model_cache[model_id]
+
+
+_TS_RE = re.compile(r"<\|[\d.]+\|>")
+
+_CHUNK   = 30 * 16000   # 30 s at 16 kHz
 
 
 def transcribe_openvino(
@@ -103,11 +101,12 @@ def transcribe_openvino(
         )
 
     import librosa
+    import numpy as np
 
     if progress_cb:
         progress_cb(32)
 
-    pipe = _get_pipeline(model_id)
+    model, processor = _load(model_id)
 
     audio, _ = librosa.load(file_path, sr=16000, mono=True)
     duration  = float(len(audio)) / 16000.0
@@ -115,31 +114,62 @@ def transcribe_openvino(
     if progress_cb:
         progress_cb(38)
 
-    gen_kwargs: dict = {}
+    # Generation kwargs
+    gen_kwargs: dict = {"return_timestamps": True}
     if language and language != "auto":
         gen_kwargs["language"] = language
         gen_kwargs["task"]     = "transcribe"
 
-    result = pipe(audio, generate_kwargs=gen_kwargs)
+    # Split into 30-second chunks (Whisper's native input window)
+    positions = list(range(0, max(1, len(audio)), _CHUNK))
+    segments:    list[dict] = []
+    text_parts:  list[str]  = []
 
-    if progress_cb:
-        progress_cb(83)
+    for i, pos in enumerate(positions):
+        chunk = audio[pos : pos + _CHUNK].astype(np.float32)
+        # Pad final chunk to exactly 30 s
+        if len(chunk) < _CHUNK:
+            chunk = np.pad(chunk, (0, _CHUNK - len(chunk)))
 
-    full_text   = (result.get("text") or "").strip()
-    # Use `or []` — get() only returns the default when the key is absent,
-    # but the pipeline may return chunks=None explicitly.
-    raw_chunks  = result.get("chunks") or []
-    segments: list[dict] = []
+        offset_s = pos / 16000.0
 
-    if raw_chunks:
-        for chunk in raw_chunks:
-            ts    = chunk.get("timestamp") or (0.0, 0.0)
-            start = float(ts[0]) if ts[0] is not None else 0.0
-            end   = float(ts[1]) if ts[1] is not None else start
-            text  = chunk.get("text", "").strip()
-            segments.append({"start": start, "end": end, "text": text})
-            duration = max(duration, end)
-    else:
+        input_features = processor.feature_extractor(
+            chunk, sampling_rate=16000, return_tensors="pt"
+        ).input_features
+
+        ids = model.generate(input_features, **gen_kwargs)
+
+        # Decode with timestamp offsets
+        decoded = processor.batch_decode(
+            ids,
+            output_offsets=True,
+            time_precision=0.02,
+            skip_special_tokens=False,
+        )
+        chunk_result = decoded[0] if decoded else {}
+
+        raw_text   = chunk_result.get("text") or ""
+        raw_offsets = chunk_result.get("offsets") or []
+
+        for seg in raw_offsets:
+            ts    = seg.get("offset") or (0.0, 0.0)
+            start = float(ts[0] if ts[0] is not None else 0.0) + offset_s
+            end   = float(ts[1] if ts[1] is not None else start) + offset_s
+            text  = _TS_RE.sub("", seg.get("text") or "").strip()
+            if text:
+                segments.append({"start": start, "end": end, "text": text})
+
+        clean = _TS_RE.sub("", raw_text).strip()
+        if clean:
+            text_parts.append(clean)
+
+        if progress_cb:
+            pct = 38 + int((i + 1) / len(positions) * 45)
+            progress_cb(min(83, pct))
+
+    full_text = " ".join(text_parts).strip()
+
+    if not segments:
         segments = [{"start": 0.0, "end": duration, "text": full_text}]
 
     return {
