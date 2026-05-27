@@ -3,6 +3,9 @@ FROM python:3.12-slim
 LABEL maintainer="rdtlTranscript"
 LABEL description="AI transcription powered by Groq Whisper — local CPU fallback included"
 
+# Set WITH_OPENVINO=true to add Intel GPU support (adds ~1 GB to the image)
+ARG WITH_OPENVINO=false
+
 WORKDIR /app
 
 # System dependencies:
@@ -16,6 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Python dependencies
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Optional: OpenVINO GenAI for Intel GPU transcription
+RUN if [ "$WITH_OPENVINO" = "true" ]; then \
+      pip install --no-cache-dir openvino-genai; \
+    fi
 
 # Pre-warm librosa/numba JIT cache so the first diarization run is fast
 RUN python -c "\

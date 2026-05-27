@@ -20,6 +20,8 @@ services:
       - ENABLE_DIARIZATION=true
       - LOCAL_DEVICE=cpu           # cpu | cuda (no Intel iGPU support in ctranslate2)
       - LOCAL_COMPUTE_TYPE=int8    # int8 = fastest on Intel CPUs with AVX2
+      # OpenVINO Intel GPU engine (requires image built with --build-arg WITH_OPENVINO=true)
+      - OPENVINO_DEVICE=GPU        # GPU | CPU | AUTO
 
     volumes:
       - /mnt/user/appdata/rdtlTranscript/uploads:/app/uploads
@@ -27,6 +29,10 @@ services:
       # Model weights are large — mount a persistent host path so they
       # survive container rebuilds (small = 466 MB, large-v3 = 3 GB)
       - /mnt/user/appdata/rdtlTranscript/models:/app/models
+
+    # Uncomment to expose Intel iGPU for OpenVINO GPU inference (Intel UHD, Arc, etc.)
+    # devices:
+    #   - /dev/dri:/dev/dri
 
     healthcheck:
       test: ["CMD", "python", "-c",

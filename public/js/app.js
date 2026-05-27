@@ -35,6 +35,9 @@ const el = {
   groqModelGroup:    $('groqModelGroup'),
   localModelGroup:   $('localModelGroup'),
   localModelSelect:  $('localModelSelect'),
+  ovModelGroup:      $('ovModelGroup'),
+  ovModelSelect:     $('ovModelSelect'),
+  ovSourceBtn:       $('ovSourceBtn'),
   sourceOptions:     $('sourceOptions'),
   transcribeBtn:     $('transcribeBtn'),
   progressPanel:     $('progressPanel'),
@@ -228,6 +231,7 @@ el.transcribeBtn.addEventListener('click', async () => {
   formData.append('model',       el.modelSelect.value      || 'whisper-large-v3-turbo');
   formData.append('source',      src);
   formData.append('local_model', el.localModelSelect.value || 'small');
+  formData.append('ov_model',    el.ovModelSelect.value    || 'small');
 
   el.optionsPanel.hidden = true;
   el.progressPanel.hidden = false;
@@ -517,9 +521,9 @@ function initSourceSelector() {
       btn.classList.add('active');
       btn.querySelector('input').checked = true;
       const src = btn.dataset.value;
-      // Show/hide model selectors based on engine
-      el.groqModelGroup.hidden  = (src === 'local');
-      el.localModelGroup.hidden = (src === 'groq');
+      el.groqModelGroup.hidden  = (src === 'local' || src === 'openvino');
+      el.localModelGroup.hidden = (src === 'groq'  || src === 'openvino');
+      el.ovModelGroup.hidden    = (src !== 'openvino');
     });
   });
 }
@@ -529,7 +533,7 @@ async function loadMeta() {
   try {
     const res = await fetch('/api/transcriptions/meta');
     if (!res.ok) return;
-    const { models, languages, local_models } = await res.json();
+    const { models, languages, local_models, ov_models, ov_available } = await res.json();
     el.languageSelect.innerHTML = languages.map(l =>
       `<option value="${l.code}">${l.label}</option>`).join('');
     el.modelSelect.innerHTML = models.map(m =>
@@ -539,8 +543,25 @@ async function loadMeta() {
         const cached = m.cached ? ' ✓ cached' : '';
         return `<option value="${m.id}">${m.label}${cached}</option>`;
       }).join('');
-      // Default to small
       el.localModelSelect.value = 'small';
+    }
+    if (ov_models?.length) {
+      el.ovModelSelect.innerHTML = ov_models.map(m => {
+        const cached = m.cached ? ' ✓ cached' : '';
+        return `<option value="${m.id}">${m.label}${cached}</option>`;
+      }).join('');
+      el.ovModelSelect.value = 'small';
+    }
+    // Grey out OpenVINO button if the package isn't installed in this image
+    if (el.ovSourceBtn) {
+      el.ovSourceBtn.title = ov_available
+        ? 'Intel GPU via OpenVINO'
+        : 'OpenVINO not installed — rebuild with --build-arg WITH_OPENVINO=true';
+      el.ovSourceBtn.style.opacity = ov_available ? '' : '0.45';
+      el.ovSourceBtn.style.cursor  = ov_available ? '' : 'not-allowed';
+      if (!ov_available) {
+        el.ovSourceBtn.addEventListener('click', (e) => e.stopImmediatePropagation(), true);
+      }
     }
   } catch (_) {}
 }

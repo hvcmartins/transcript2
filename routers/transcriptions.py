@@ -15,6 +15,9 @@ from services.database import (
 )
 from services.groq_service import SUPPORTED_LANGUAGES, SUPPORTED_MODELS, transcribe_file, preprocess_audio
 from services.local_transcription import SUPPORTED_LOCAL_MODELS, transcribe_locally, is_model_cached
+from services.whisper_openvino import (
+    OPENVINO_AVAILABLE, SUPPORTED_OV_MODELS, transcribe_openvino, is_ov_model_cached,
+)
 
 router = APIRouter()
 
@@ -37,10 +40,16 @@ async def get_meta():
         {**m, "cached": is_model_cached(m["id"])}
         for m in SUPPORTED_LOCAL_MODELS
     ]
+    ov_models_with_cache = [
+        {**m, "cached": is_ov_model_cached(m["id"])}
+        for m in SUPPORTED_OV_MODELS
+    ]
     return {
         "models":        SUPPORTED_MODELS,
         "languages":     SUPPORTED_LANGUAGES,
         "local_models":  local_models_with_cache,
+        "ov_models":     ov_models_with_cache,
+        "ov_available":  OPENVINO_AVAILABLE,
     }
 
 
@@ -71,8 +80,9 @@ async def create(
     file: UploadFile = File(...),
     language: str    = Form("auto"),
     model: str       = Form("whisper-large-v3-turbo"),
-    source: str      = Form("groq"),   # "groq" | "local" | "auto"
+    source: str      = Form("groq"),   # "groq" | "local" | "auto" | "openvino"
     local_model: str = Form("small"),
+    ov_model: str    = Form("small"),
 ):
     suffix = Path(file.filename or "").suffix.lower() or ".audio"
     if suffix not in ALLOWED_EXTENSIONS:
@@ -108,7 +118,7 @@ async def create(
     manager = request.app.state.manager
     background_tasks.add_task(
         _run_transcription, record_id, str(file_path),
-        language, model, manager, source, local_model
+        language, model, manager, source, local_model, ov_model
     )
 
     return record
@@ -129,7 +139,7 @@ async def delete(id: str):
 # ── Background worker ─────────────────────────────────────────────────────────
 async def _run_transcription(
     id: str, file_path: str, language: str, model: str, manager,
-    source: str = "groq", local_model: str = "small",
+    source: str = "groq", local_model: str = "small", ov_model: str = "small",
 ) -> None:
     """
     Orchestrates preprocessing → transcription (Groq / local / auto) →
@@ -171,7 +181,7 @@ async def _run_transcription(
                 await _send(30, extra={"label": "Groq unavailable — switching to local CPU…"})
 
         # Local attempt (source=="local" or Groq failed in "auto" mode)
-        if result is None:
+        if result is None and source in ("local", "auto"):
             # First run downloads the model (~466 MB for small) — warn the user
             from services.local_transcription import is_model_cached
             if not is_model_cached(local_model):
@@ -191,6 +201,25 @@ async def _run_transcription(
 
             result = await asyncio.to_thread(
                 transcribe_locally, processed_path, language, local_model, _local_progress
+            )
+
+        # OpenVINO attempt (source=="openvino" only — no auto-fallback)
+        if source == "openvino":
+            if not is_ov_model_cached(ov_model):
+                await _send(28, extra={"label": f"Downloading OpenVINO {ov_model} model (first time)…"})
+            ov_device = os.getenv("OPENVINO_DEVICE", "GPU")
+            await _send(30, extra={"label": f"Transcribing with OpenVINO ({ov_model}) on {ov_device}…"})
+
+            loop = asyncio.get_event_loop()
+
+            def _ov_progress(pct: int):
+                asyncio.run_coroutine_threadsafe(
+                    _send(pct, extra={"label": f"Transcribing with OpenVINO ({ov_model})…"}),
+                    loop,
+                )
+
+            result = await asyncio.to_thread(
+                transcribe_openvino, processed_path, language, ov_model, _ov_progress
             )
 
         # ── Step 3: speaker diarization ───────────────────────────────────────

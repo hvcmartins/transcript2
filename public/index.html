@@ -92,6 +92,12 @@
               <option value="small">Small — 466 MB · balanced ✓</option>
             </select>
           </div>
+          <div class="option-group" id="ovModelGroup" hidden>
+            <label for="ovModelSelect">OpenVINO Model</label>
+            <select id="ovModelSelect">
+              <option value="small">Small — ~230 MB · balanced ✓</option>
+            </select>
+          </div>
         </div>
 
         <!-- Transcription engine row -->
@@ -112,6 +118,11 @@
               <input type="radio" name="source" value="local" hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               Local CPU
+            </label>
+            <label class="source-btn" id="ovSourceBtn" data-value="openvino">
+              <input type="radio" name="source" value="openvino" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              Intel GPU
             </label>
           </div>
         </div>
