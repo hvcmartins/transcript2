@@ -3,27 +3,17 @@ FROM python:3.12-slim
 LABEL maintainer="rdtlTranscript"
 LABEL description="AI transcription powered by Groq Whisper — no GPU required"
 
-# No native compilation — Python's sqlite3 is built into the interpreter
-
-# Create non-root user
-RUN groupadd -r rdtl && useradd -r -g rdtl rdtl
-
 WORKDIR /app
 
-# Install Python dependencies (pure-Python wheels, no build tools needed)
+# Install Python dependencies
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source
-COPY --chown=rdtl:rdtl . .
+COPY . .
 
-# Create persistent data directories
-RUN mkdir -p /app/uploads /app/data && \
-    chown -R rdtl:rdtl /app/uploads /app/data
-
-USER rdtl
-
-VOLUME ["/app/uploads", "/app/data"]
+# Create default data directories (used when no volume is mounted)
+RUN mkdir -p /app/uploads /app/data
 
 ENV PORT=6133 \
     HOST=0.0.0.0 \
