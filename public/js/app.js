@@ -1,10 +1,20 @@
+// ─── UUID helper (works on HTTP, not just HTTPS) ─────────────────────────────
+function generateUUID() {
+  try { return crypto.randomUUID(); } catch (_) {}
+  // Fallback for non-secure contexts (plain HTTP on local network)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
 // ─── State ──────────────────────────────────────────────────────────────────
 const state = {
   currentView: 'upload',
   selectedFile: null,
   currentTranscriptionId: null,
   ws: null,
-  sessionId: crypto.randomUUID(),
+  sessionId: generateUUID(),
   history: [],
 };
 
@@ -291,8 +301,24 @@ el.exportMenu.querySelectorAll('.dropdown-item').forEach(item => {
 
 el.copyBtn.addEventListener('click', async () => {
   const texts = [...el.segmentView.querySelectorAll('.seg-text')].map(e => e.textContent).join('\n');
-  await navigator.clipboard.writeText(texts).catch(() => {});
-  showToast('Copied to clipboard!', 'success');
+  try {
+    // clipboard API requires HTTPS; fall back to execCommand on plain HTTP
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(texts);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = texts;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    showToast('Copied to clipboard!', 'success');
+  } catch (_) {
+    showToast('Copy failed — try selecting the text manually', 'error');
+  }
 });
 
 // ─── Back Button ─────────────────────────────────────────────────────────────
