@@ -82,8 +82,6 @@ def _get_pipeline(model_id: str):
             tokenizer=processor.tokenizer,
             feature_extractor=processor.feature_extractor,
             max_new_tokens=448,
-            chunk_length_s=30,
-            stride_length_s=5,
             return_timestamps=True,
         )
     return _pipeline_cache[model_id]
@@ -122,11 +120,7 @@ def transcribe_openvino(
         gen_kwargs["language"] = language
         gen_kwargs["task"]     = "transcribe"
 
-    # Pass audio as dict so the pipeline knows the sampling rate
-    result = pipe(
-        {"array": audio, "sampling_rate": 16000},
-        generate_kwargs=gen_kwargs,
-    )
+    result = pipe(audio, generate_kwargs=gen_kwargs)
 
     if progress_cb:
         progress_cb(83)

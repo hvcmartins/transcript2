@@ -258,7 +258,8 @@ async def _run_transcription(
         })
 
     except Exception as exc:
-        print(f"Transcription error [{id}]: {exc}")
+        import traceback
+        print(f"Transcription error [{id}]: {exc}\n{traceback.format_exc()}")
         update_transcription(id, {"status": "failed", "error_msg": str(exc)})
         await manager.broadcast(id, {
             "type":   "error",
