@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from routers import transcriptions, exports
@@ -85,11 +84,8 @@ async def health():
 
 
 # ── Static frontend (must come last) ─────────────────────────────────────────
-# Serve css/js as static assets, index.html for everything else
-app.mount("/css", StaticFiles(directory="public/css"), name="css")
-app.mount("/js",  StaticFiles(directory="public/js"),  name="js")
-
-
-@app.get("/{full_path:path}", include_in_schema=False)
-async def serve_spa(_full_path: str = ""):
-    return FileResponse("public/index.html")
+# Single mount at "/" with html=True:
+#   - serves actual files (js, css) when they exist in public/
+#   - falls back to index.html for any unknown path (SPA behaviour)
+# All /api/* and /ws routes above take priority because they were added first.
+app.mount("/", StaticFiles(directory="public", html=True), name="static")
