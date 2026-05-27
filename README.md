@@ -245,7 +245,7 @@ rdtlTranscript/
 │   └── exports.js             # TXT, SRT, VTT, TSV, JSON export
 ├── services/
 │   ├── groq.js                # Groq Whisper API wrapper
-│   └── database.js            # SQLite via better-sqlite3
+│   └── database.js            # SQLite via node:sqlite (built into Node.js 24)
 ├── middleware/
 │   └── upload.js              # Multer file upload + validation
 ├── public/                    # Vanilla JS frontend (no build step)
