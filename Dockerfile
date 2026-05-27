@@ -3,21 +3,18 @@ FROM node:24-alpine
 LABEL maintainer="rdtlTranscript"
 LABEL description="AI transcription powered by Groq Whisper — no GPU required"
 
-# Build tools required by better-sqlite3 native addon
-RUN apk add --no-cache python3 make g++ libstdc++
+# No native addons: uses node:sqlite built into Node.js 24 (no python/g++/make needed)
 
 # Create non-root user
 RUN addgroup -S rdtl && adduser -S rdtl -G rdtl
 
 WORKDIR /app
 
-# Copy both manifests so npm ci can do a clean, reproducible install
+# Copy manifests — npm ci uses the lock file for a reproducible install
 COPY package.json package-lock.json ./
-
-# npm ci: uses lock file, faster, no network guessing, no --prefer-offline needed
 RUN npm ci --omit=dev
 
-# Copy application source (after install to keep layer cache valid)
+# Copy application source
 COPY --chown=rdtl:rdtl . .
 
 # Create persistent data directories and fix ownership

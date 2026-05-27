@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
@@ -13,9 +13,10 @@ const dbPath = join(dbDir, 'rdtlTranscript.db');
 let db;
 
 export function initDatabase() {
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  db = new DatabaseSync(dbPath);
+  // node:sqlite uses exec() for PRAGMAs (no .pragma() method)
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS transcriptions (
@@ -34,7 +35,7 @@ export function initDatabase() {
       model       TEXT DEFAULT 'whisper-large-v3-turbo',
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
-    );
+    )
   `);
 
   console.log('📦 Database ready at', dbPath);
@@ -47,12 +48,10 @@ export function getDb() {
 }
 
 export function createTranscription(data) {
-  const d = getDb();
-  const stmt = d.prepare(`
+  getDb().prepare(`
     INSERT INTO transcriptions (id, filename, original_name, file_size, language, model, status)
     VALUES (@id, @filename, @originalName, @fileSize, @language, @model, 'pending')
-  `);
-  stmt.run(data);
+  `).run(data);
   return getTranscription(data.id);
 }
 
@@ -81,5 +80,5 @@ export function updateTranscription(id, fields) {
 }
 
 export function deleteTranscription(id) {
-  return getDb().prepare('DELETE FROM transcriptions WHERE id = ?').run(id);
+  getDb().prepare('DELETE FROM transcriptions WHERE id = ?').run(id);
 }
