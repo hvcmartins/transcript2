@@ -9,7 +9,7 @@ const __dirname = dirname(__filename);
 const dbDir = process.env.DATA_DIR || join(__dirname, '..', 'data');
 if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true });
 
-const dbPath = join(dbDir, 'transcribify.db');
+const dbPath = join(dbDir, 'rdtlTranscript.db');
 let db;
 
 export function initDatabase() {

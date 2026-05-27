@@ -29,7 +29,6 @@ wss.on('connection', (ws) => {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.type === 'register') {
-        // A client may register multiple IDs (its own sessionId + transcription IDs)
         registeredIds.add(msg.sessionId);
         clients.set(msg.sessionId, ws);
       }
@@ -57,14 +56,14 @@ app.use('/api/exports', exportsRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', version: '1.0.0' });
+  res.json({ status: 'ok', app: 'rdtlTranscript', version: '1.0.0' });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 6133;
 const HOST = process.env.HOST || '0.0.0.0';
 
 initDatabase();
 
 server.listen(PORT, HOST, () => {
-  console.log(`🎙️  Transcribify running at http://${HOST}:${PORT}`);
+  console.log(`📝  rdtlTranscript running at http://${HOST}:${PORT}`);
 });

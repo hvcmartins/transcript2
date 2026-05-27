@@ -1,7 +1,7 @@
 {
-  "name": "transcribify",
+  "name": "rdtlTranscript",
   "version": "1.0.0",
-  "description": "TurboScribe clone powered by Groq Whisper",
+  "description": "AI transcription powered by Groq Whisper — no GPU required",
   "main": "server.js",
   "type": "module",
   "engines": {

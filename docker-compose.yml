@@ -1,28 +1,28 @@
 version: "3.9"
 
 services:
-  transcribify:
+  rdtlTranscript:
     build: .
-    image: transcribify:latest
-    container_name: transcribify
+    image: rdtltranscript:latest
+    container_name: rdtlTranscript
     restart: unless-stopped
 
     ports:
-      - "3005:3000"        # Change 3005 to any free port on your server
+      - "6133:6133"
 
     environment:
-      - GROQ_API_KEY=gIsuzbde73TXpxumEGJDFkZZ01S77hO5eLB79w/D/9s=
-      - PORT=3000
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - PORT=6133
       - HOST=0.0.0.0
       - UPLOAD_DIR=/app/uploads
       - DATA_DIR=/app/data
 
     volumes:
-      - /mnt/user/appdata/transcribify/uploads:/app/uploads
-      - /mnt/user/appdata/transcribify/data:/app/data
+      - /mnt/user/appdata/rdtlTranscript/uploads:/app/uploads
+      - /mnt/user/appdata/rdtlTranscript/data:/app/data
 
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:6133/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

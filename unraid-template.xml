@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>rdtlTranscript</Name>
+  <Repository>rdtltranscript:latest</Repository>
+  <Registry></Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/hvcmartins/transcript2</Support>
+  <Project>https://github.com/hvcmartins/transcript2</Project>
+  <Overview>rdtlTranscript — AI transcription powered by Groq Whisper. Drag-and-drop audio or video files and receive accurate text with timestamps in seconds. No GPU required. Export to TXT, SRT, VTT, TSV, or JSON.</Overview>
+  <Category>Productivity: MediaApp:</Category>
+  <WebUI>http://[IP]:[PORT:6133]/</WebUI>
+  <TemplateURL></TemplateURL>
+  <Icon>https://cdn-icons-png.flaticon.com/512/4211/4211763.png</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <PostArgs></PostArgs>
+  <CPUset></CPUset>
+  <DateInstalled></DateInstalled>
+  <DonateText></DonateText>
+  <DonateLink></DonateLink>
+  <Description>rdtlTranscript — AI transcription powered by Groq Whisper. No GPU needed. Supports 25+ languages, timestamped segments, and multiple export formats (TXT, SRT, VTT, TSV, JSON).</Description>
+
+  <Networking>
+    <Mode>bridge</Mode>
+    <Publish>
+      <Port>
+        <HostPort>6133</HostPort>
+        <ContainerPort>6133</ContainerPort>
+        <Protocol>tcp</Protocol>
+      </Port>
+    </Publish>
+  </Networking>
+
+  <Data>
+    <Volume>
+      <HostDir>/mnt/user/appdata/rdtlTranscript/uploads</HostDir>
+      <ContainerDir>/app/uploads</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/rdtlTranscript/data</HostDir>
+      <ContainerDir>/app/data</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+  </Data>
+
+  <Environment>
+    <Variable>
+      <Value></Value>
+      <Name>GROQ_API_KEY</Name>
+      <Mode></Mode>
+    </Variable>
+    <Variable>
+      <Value>6133</Value>
+      <Name>PORT</Name>
+      <Mode></Mode>
+    </Variable>
+    <Variable>
+      <Value>0.0.0.0</Value>
+      <Name>HOST</Name>
+      <Mode></Mode>
+    </Variable>
+    <Variable>
+      <Value>/app/uploads</Value>
+      <Name>UPLOAD_DIR</Name>
+      <Mode></Mode>
+    </Variable>
+    <Variable>
+      <Value>/app/data</Value>
+      <Name>DATA_DIR</Name>
+      <Mode></Mode>
+    </Variable>
+  </Environment>
+
+  <Labels></Labels>
+</Container>

@@ -8,3 +8,4 @@ uploads/*
 data/*
 *.md
 .DS_Store
+unraid-template.xml
