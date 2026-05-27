@@ -36,7 +36,7 @@ async def get_meta():
 
 
 # ── List ──────────────────────────────────────────────────────────────────────
-@router.get("/")
+@router.get("")
 async def list_transcriptions():
     return get_all_transcriptions()
 
@@ -55,7 +55,7 @@ async def get_one(id: str):
 
 
 # ── Upload + transcribe ───────────────────────────────────────────────────────
-@router.post("/", status_code=202)
+@router.post("", status_code=202)
 async def create(
     request: Request,
     background_tasks: BackgroundTasks,
