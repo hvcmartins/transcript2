@@ -22,7 +22,8 @@ services:
       - /mnt/user/appdata/rdtlTranscript/data:/app/data
 
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:6133/api/health"]
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:6133/api/health')"]
       interval: 30s
       timeout: 10s
       retries: 3

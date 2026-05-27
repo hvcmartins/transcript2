@@ -1,33 +1,31 @@
-FROM node:20-alpine
+FROM python:3.12-slim
 
 LABEL maintainer="rdtlTranscript"
 LABEL description="AI transcription powered by Groq Whisper — no GPU required"
 
-# Build tools for better-sqlite3 native addon (used only at build time)
-RUN apk add --no-cache python3 make g++ libstdc++
+# No native compilation — Python's sqlite3 is built into the interpreter
 
 # Create non-root user
-RUN addgroup -S rdtl && adduser -S rdtl -G rdtl
+RUN groupadd -r rdtl && useradd -r -g rdtl rdtl
 
 WORKDIR /app
 
-# Copy manifests so npm ci can do a clean, reproducible install
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# Install Python dependencies (pure-Python wheels, no build tools needed)
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source
 COPY --chown=rdtl:rdtl . .
 
-# Create persistent data directories and fix ownership
+# Create persistent data directories
 RUN mkdir -p /app/uploads /app/data && \
-    chown -R rdtl:rdtl /app/uploads /app/data /app/node_modules
+    chown -R rdtl:rdtl /app/uploads /app/data
 
 USER rdtl
 
 VOLUME ["/app/uploads", "/app/data"]
 
-ENV NODE_ENV=production \
-    PORT=6133 \
+ENV PORT=6133 \
     HOST=0.0.0.0 \
     UPLOAD_DIR=/app/uploads \
     DATA_DIR=/app/data
@@ -35,6 +33,6 @@ ENV NODE_ENV=production \
 EXPOSE 6133
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-  CMD wget -qO- http://localhost:6133/api/health || exit 1
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:6133/api/health')" || exit 1
 
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "uvicorn main:app --host $HOST --port $PORT"]

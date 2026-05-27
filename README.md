@@ -3,7 +3,7 @@
 A **TurboScribe-inspired transcription app** powered by [Groq](https://groq.com) Whisper.  
 Drag-and-drop audio or video files and get accurate, timestamped transcriptions in seconds — **no GPU required**.
 
-![Node.js](https://img.shields.io/badge/Node.js-20_LTS-green) ![Docker](https://img.shields.io/badge/Docker-ready-blue) ![Groq](https://img.shields.io/badge/Groq-Whisper-purple) ![Port](https://img.shields.io/badge/Port-6133-orange) ![Unraid](https://img.shields.io/badge/Unraid-7.2.2-red)
+![Python](https://img.shields.io/badge/Python-3.12-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-latest-teal) ![Docker](https://img.shields.io/badge/Docker-ready-blue) ![Groq](https://img.shields.io/badge/Groq-Whisper-purple) ![Port](https://img.shields.io/badge/Port-6133-orange) ![Unraid](https://img.shields.io/badge/Unraid-7.2.2-red)
 
 ---
 
@@ -24,17 +24,20 @@ Drag-and-drop audio or video files and get accurate, timestamped transcriptions 
 ## 🚀 Quick Start (Local Development)
 
 ```bash
-# 1. Clone & install
+# 1. Clone & create virtualenv
 git clone https://github.com/hvcmartins/transcript2
 cd transcript2
-npm install
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-# 2. Set your Groq API key
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Set your Groq API key
 cp .env.example .env
 # Edit .env and set GROQ_API_KEY=your_key
 
-# 3. Run
-npm start
+# 4. Run
+uvicorn main:app --port 6133 --reload
 # Open http://localhost:6133
 ```
 
@@ -239,20 +242,19 @@ docker restart rdtlTranscript
 
 ```
 rdtlTranscript/
-├── server.js                  # Express + WebSocket server (port 6133)
-├── routes/
-│   ├── transcriptions.js      # Upload, list, get, delete endpoints
-│   └── exports.js             # TXT, SRT, VTT, TSV, JSON export
+├── main.py                    # FastAPI app + WebSocket server (port 6133)
+├── routers/
+│   ├── transcriptions.py      # Upload, list, get, delete endpoints
+│   └── exports.py             # TXT, SRT, VTT, TSV, JSON export
 ├── services/
-│   ├── groq.js                # Groq Whisper API wrapper
-│   └── database.js            # SQLite via better-sqlite3
-├── middleware/
-│   └── upload.js              # Multer file upload + validation
+│   ├── groq_service.py        # Groq Whisper API wrapper
+│   └── database.py            # SQLite via Python built-in sqlite3
 ├── public/                    # Vanilla JS frontend (no build step)
 │   ├── index.html
 │   ├── css/style.css
 │   └── js/app.js
-├── Dockerfile                 # Node.js 20 LTS Alpine, port 6133
+├── requirements.txt           # Python dependencies
+├── Dockerfile                 # Python 3.12-slim, port 6133
 ├── docker-compose.yml
 ├── unraid-template.xml        # Unraid Community Applications template
 └── .env.example
