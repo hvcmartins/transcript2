@@ -1,0 +1,67 @@
+FROM ubuntu:24.04
+
+LABEL maintainer="rdtlTranscript"
+LABEL description="AI transcription — OpenVINO Intel GPU variant (Ubuntu 24.04 + Intel GPU drivers)"
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# pip on Ubuntu 24.04 enforces PEP 668 "externally managed" — override for container use
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
+WORKDIR /app
+
+# System deps: Python 3.12 (native in 24.04), ffmpeg, libsndfile1, pip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3.12 python3.12-venv python3-pip \
+      ffmpeg libsndfile1 \
+      gnupg curl ca-certificates \
+  && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
+  && ln -sf /usr/bin/python3.12 /usr/local/bin/python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+# Intel GPU drivers: OpenCL ICD + Level Zero (native Ubuntu 24.04 / noble support)
+RUN curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key \
+      | gpg --dearmor | tee /usr/share/keyrings/intel-graphics.gpg > /dev/null && \
+    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu noble client' \
+      | tee /etc/apt/sources.list.d/intel-gpu.list > /dev/null && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      intel-opencl-icd \
+      intel-level-zero-gpu \
+      level-zero \
+      ocl-icd-libopencl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies (same as standard image)
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install OpenVINO GenAI
+RUN pip install --no-cache-dir openvino-genai
+
+# Pre-warm librosa/numba JIT cache
+RUN python3 -c "\
+import numpy as np, librosa; \
+y = np.zeros(16000, dtype=np.float32); \
+librosa.feature.mfcc(y=y, sr=16000, n_mfcc=20)" 2>/dev/null || true
+
+# Copy application source
+COPY . .
+
+RUN mkdir -p /app/uploads /app/data /app/models
+
+ENV PORT=6133 \
+    HOST=0.0.0.0 \
+    UPLOAD_DIR=/app/uploads \
+    DATA_DIR=/app/data \
+    MODELS_DIR=/app/models \
+    ENABLE_DIARIZATION=true \
+    LOCAL_DEVICE=cpu \
+    LOCAL_COMPUTE_TYPE=int8 \
+    OPENVINO_DEVICE=AUTO
+
+EXPOSE 6133
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:6133/api/health')" || exit 1
+
+CMD ["sh", "-c", "uvicorn main:app --host $HOST --port $PORT"]
