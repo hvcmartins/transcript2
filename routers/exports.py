@@ -18,26 +18,80 @@ def _ts(secs: float, sep: str = ",") -> str:
     return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
 
 
+def _mmss(secs: float) -> str:
+    """Short MM:SS timestamp for human-readable text exports."""
+    m = int(secs // 60)
+    s = int(secs % 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def _spk_prefix(seg: dict, prev_speaker: list) -> str:
+    """Return '[Speaker X] ' prefix when speaker changes (or first segment)."""
+    spk = seg.get("speaker")
+    if not spk:
+        return ""
+    prefix = f"[{spk}] " if spk != prev_speaker[0] else ""
+    prev_speaker[0] = spk
+    return prefix
+
+
+def _txt_plain(item: dict) -> str:
+    return item["transcript"] or ""
+
+
+def _txt_ts(segments: list) -> str:
+    """Timestamped plain-text: [MM:SS] [Speaker X] text"""
+    lines = []
+    prev = [None]
+    for seg in segments:
+        ts   = _mmss(seg.get("start", 0))
+        spk  = _spk_prefix(seg, prev)
+        text = seg.get("text", "").strip()
+        lines.append(f"[{ts}] {spk}{text}")
+    return "\n".join(lines)
+
+
 def _srt(segments: list) -> str:
     parts = []
+    prev = [None]
     for i, seg in enumerate(segments, 1):
+        spk  = _spk_prefix(seg, prev)
+        text = f"{spk}{seg['text'].strip()}"
         parts.append(
-            f"{i}\n{_ts(seg['start'])} --> {_ts(seg['end'])}\n{seg['text'].strip()}\n"
+            f"{i}\n{_ts(seg['start'])} --> {_ts(seg['end'])}\n{text}\n"
         )
     return "\n".join(parts)
 
 
 def _vtt(segments: list) -> str:
     lines = ["WEBVTT", ""]
+    prev = [None]
     for i, seg in enumerate(segments, 1):
-        lines += [str(i), f"{_ts(seg['start'], '.')} --> {_ts(seg['end'], '.')}", seg["text"].strip(), ""]
+        spk = seg.get("speaker")
+        text = seg["text"].strip()
+        time_line = f"{_ts(seg['start'], '.')} --> {_ts(seg['end'], '.')}"
+        if spk:
+            # WebVTT voice span — compatible with most players
+            text_line = f"<v {spk}>{text}"
+        else:
+            text_line = text
+        lines += [str(i), time_line, text_line, ""]
     return "\n".join(lines)
 
 
 def _tsv(segments: list) -> str:
-    rows = ["start\tend\ttext"]
-    for seg in segments:
-        rows.append(f"{seg['start']:.3f}\t{seg['end']:.3f}\t{seg['text'].strip()}")
+    has_speakers = any(seg.get("speaker") for seg in segments)
+    if has_speakers:
+        rows = ["start\tend\tspeaker\ttext"]
+        for seg in segments:
+            rows.append(
+                f"{seg['start']:.3f}\t{seg['end']:.3f}\t"
+                f"{seg.get('speaker', '')}\t{seg['text'].strip()}"
+            )
+    else:
+        rows = ["start\tend\ttext"]
+        for seg in segments:
+            rows.append(f"{seg['start']:.3f}\t{seg['end']:.3f}\t{seg['text'].strip()}")
     return "\n".join(rows)
 
 
@@ -55,7 +109,10 @@ async def export_transcription(id: str, fmt: str):
 
     match fmt:
         case "txt":
-            content, mime, ext = item["transcript"], "text/plain", "txt"
+            content, mime, ext = _txt_plain(item), "text/plain", "txt"
+        case "txt-ts":
+            content, mime, ext = _txt_ts(segments), "text/plain", "txt"
+            base = base + "_timestamped"
         case "srt":
             content, mime, ext = _srt(segments), "text/srt", "srt"
         case "vtt":

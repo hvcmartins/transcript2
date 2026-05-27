@@ -41,7 +41,7 @@
 
         <div class="usage-row" id="usageReqRow" hidden>
           <div class="usage-labels">
-            <span>Requests</span>
+            <span>Daily Requests</span>
             <span id="usageReqNums"></span>
           </div>
           <div class="usage-track">
@@ -51,7 +51,7 @@
 
         <div class="usage-row" id="usageAudioRow" hidden>
           <div class="usage-labels">
-            <span>Audio</span>
+            <span>Audio / min</span>
             <span id="usageAudioNums"></span>
           </div>
           <div class="usage-track">
@@ -86,7 +86,7 @@
         </div>
         <h3>Drop your file here</h3>
         <p>or <button class="link-btn" id="browseBtn">browse to upload</button></p>
-        <p class="upload-hint">MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV &amp; more — up to 25 MB</p>
+        <p class="upload-hint">MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV &amp; more — up to 250 MB (audio compressed before sending to Groq)</p>
         <input type="file" id="fileInput" accept="audio/*,video/*" hidden />
       </div>
 
@@ -157,6 +157,7 @@
             </button>
             <div class="dropdown-menu" id="exportMenu">
               <button class="dropdown-item" data-format="txt">📄 Plain Text (.txt)</button>
+              <button class="dropdown-item" data-format="txt-ts">🕐 Timestamped Text (.txt)</button>
               <button class="dropdown-item" data-format="srt">🎬 SubRip (.srt)</button>
               <button class="dropdown-item" data-format="vtt">🌐 WebVTT (.vtt)</button>
               <button class="dropdown-item" data-format="tsv">📊 TSV (.tsv)</button>

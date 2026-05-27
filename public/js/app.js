@@ -94,7 +94,7 @@ function handleWsMessage(msg) {
   if (msg.id && msg.id !== state.currentTranscriptionId) return;
 
   if (msg.type === 'progress') {
-    updateProgress(msg.progress, 'Transcribing…');
+    updateProgress(msg.progress, msg.label || 'Transcribing…');
   } else if (msg.type === 'complete') {
     stopPolling();
     updateProgress(100, 'Done!');
@@ -419,25 +419,39 @@ function renderHistory(items) {
 }
 
 // ─── Groq API Usage Bar ───────────────────────────────────────────────────────
+// Groq rate-limit header semantics (confirmed from docs):
+//   x-ratelimit-limit-requests   / remaining / reset  → DAILY quota (RPD)
+//   x-ratelimit-limit-tokens     / remaining / reset  → PER-MINUTE quota (TPM, in audio seconds)
+// There is no programmatic usage API on the free plan — headers are the only source.
+
 function _usageFillClass(pct) {
   if (pct >= 90) return 'crit';
   if (pct >= 70) return 'warn';
   return '';
 }
 
-function _resetLabel(resetStr) {
+function _resetLabel(resetStr, label) {
   if (!resetStr) return '';
-  // Groq may send an ISO timestamp or a relative string like "1m30s"
+  // Groq returns ISO timestamps or relative seconds strings
+  const asNum = Number(resetStr);
+  if (!isNaN(asNum)) {
+    // Relative seconds
+    const diff = Math.max(0, Math.round(asNum));
+    if (diff <= 0) return `${label} resets now`;
+    const m = Math.floor(diff / 60), s = diff % 60;
+    return m > 0 ? `${label} resets in ${m}m ${s}s` : `${label} resets in ${s}s`;
+  }
   try {
     const ts = new Date(resetStr);
     if (!isNaN(ts)) {
       const diff = Math.max(0, Math.round((ts - Date.now()) / 1000));
-      if (diff <= 0) return 'Reset: now';
+      if (diff <= 0) return `${label} resets now`;
       const m = Math.floor(diff / 60), s = diff % 60;
-      return m > 0 ? `Reset in ${m}m ${s}s` : `Reset in ${s}s`;
+      if (diff > 3600) return `${label} resets in ${Math.round(diff/3600)}h`;
+      return m > 0 ? `${label} resets in ${m}m ${s}s` : `${label} resets in ${s}s`;
     }
   } catch (_) {}
-  return `Reset: ${resetStr}`;
+  return '';
 }
 
 async function loadUsage() {
@@ -445,34 +459,37 @@ async function loadUsage() {
     const res = await fetch('/api/usage');
     if (!res.ok) return;
     const d = await res.json();
-    if (!d.last_updated) return;   // no data yet
+    if (!d.last_updated) return;   // no transcription done yet
 
     el.usagePanel.hidden = false;
 
-    // ── Requests bar ──────────────────────────────────────────────────────────
+    // ── Daily requests bar (RPD) ──────────────────────────────────────────────
     if (d.requests_limit != null && d.requests_remaining != null) {
       const used = d.requests_limit - d.requests_remaining;
       const pct  = Math.min(100, Math.round(used / d.requests_limit * 100));
-      el.usageReqNums.textContent = `${d.requests_remaining} left / ${d.requests_limit}`;
+      el.usageReqNums.textContent = `${d.requests_remaining} / ${d.requests_limit} left today`;
       el.usageReqFill.style.width = pct + '%';
       el.usageReqFill.className = 'usage-fill ' + _usageFillClass(pct);
       el.usageReqRow.hidden = false;
     }
 
-    // ── Audio seconds bar ─────────────────────────────────────────────────────
+    // ── Per-minute audio seconds bar (TPM) ────────────────────────────────────
     if (d.tokens_limit != null && d.tokens_remaining != null) {
       const used = d.tokens_limit - d.tokens_remaining;
       const pct  = Math.min(100, Math.round(used / d.tokens_limit * 100));
-      const fmtSec = (s) => s >= 3600 ? `${(s/3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s/60)}m` : `${s}s`;
-      el.usageAudioNums.textContent = `${fmtSec(d.tokens_remaining)} left / ${fmtSec(d.tokens_limit)}`;
+      const fmtSec = (s) => s >= 60 ? `${Math.round(s/60)}m` : `${s}s`;
+      el.usageAudioNums.textContent = `${fmtSec(d.tokens_remaining)} / ${fmtSec(d.tokens_limit)} this min`;
       el.usageAudioFill.style.width = pct + '%';
       el.usageAudioFill.className = 'usage-fill ' + _usageFillClass(pct);
       el.usageAudioRow.hidden = false;
     }
 
-    // ── Reset label ───────────────────────────────────────────────────────────
-    const resetStr = d.requests_reset || d.tokens_reset || '';
-    el.usageReset.textContent = _resetLabel(resetStr);
+    // ── Reset labels ──────────────────────────────────────────────────────────
+    const resets = [
+      _resetLabel(d.requests_reset, 'Daily quota'),
+      _resetLabel(d.tokens_reset,   'Audio quota'),
+    ].filter(Boolean);
+    el.usageReset.textContent = resets[0] || '';
 
   } catch (_) {}
 }
