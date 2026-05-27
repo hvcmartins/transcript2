@@ -63,7 +63,17 @@ def _get_pipeline(model_id: str):
                 repo_id=_hf_id(model_id),
                 local_dir=str(model_path),
             )
-        _pipeline_cache[model_id] = ov_genai.WhisperPipeline(str(model_path), OPENVINO_DEVICE)
+        try:
+            _pipeline_cache[model_id] = ov_genai.WhisperPipeline(str(model_path), OPENVINO_DEVICE)
+        except Exception as e:
+            # Corrupt/incomplete download — wipe the cache dir so next call re-downloads
+            import shutil
+            shutil.rmtree(str(model_path), ignore_errors=True)
+            raise RuntimeError(
+                f"Failed to load OpenVINO model '{model_id}' "
+                f"(cached copy deleted — will re-download on next attempt). "
+                f"Original error: {e}"
+            ) from e
     return _pipeline_cache[model_id]
 
 
