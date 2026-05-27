@@ -20,8 +20,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Optional: OpenVINO GenAI for Intel GPU transcription
+# Optional: OpenVINO GenAI + Intel GPU OpenCL runtime for Intel GPU transcription
 RUN if [ "$WITH_OPENVINO" = "true" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        intel-opencl-icd \
+        ocl-icd-libopencl1 \
+        libegl1 \
+      && rm -rf /var/lib/apt/lists/*; \
       pip install --no-cache-dir openvino-genai; \
     fi
 
