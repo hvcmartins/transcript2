@@ -1,5 +1,7 @@
 import os
+from datetime import datetime, timezone
 from pathlib import Path
+
 from groq import Groq
 
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB (Groq limit)
@@ -39,6 +41,7 @@ SUPPORTED_LANGUAGES = [
 ]
 
 _client: Groq | None = None
+_last_usage: dict = {}
 
 
 def get_client() -> Groq:
@@ -51,6 +54,11 @@ def get_client() -> Groq:
     return _client
 
 
+def get_last_usage() -> dict:
+    """Return the rate-limit info captured from the most recent Groq API call."""
+    return _last_usage
+
+
 def transcribe_file(
     file_path: str,
     language: str = "auto",
@@ -60,6 +68,8 @@ def transcribe_file(
     Blocking call — run via asyncio.to_thread() from async context.
     Returns plain dict (JSON-serialisable).
     """
+    global _last_usage
+
     client = get_client()
     path = Path(file_path)
 
@@ -78,10 +88,39 @@ def transcribe_file(
         params["language"] = language
 
     with open(file_path, "rb") as f:
-        response = client.audio.transcriptions.create(
+        raw = client.audio.transcriptions.with_raw_response.create(
             file=(path.name, f),
             **params,
         )
+
+    # ── Capture rate-limit headers ────────────────────────────────────────────
+    hdrs = raw.headers
+    def _int(key: str) -> int | None:
+        v = hdrs.get(key)
+        try:
+            return int(v) if v is not None else None
+        except (ValueError, TypeError):
+            return None
+
+    req_limit     = _int("x-ratelimit-limit-requests")
+    req_remaining = _int("x-ratelimit-remaining-requests")
+    tok_limit     = _int("x-ratelimit-limit-tokens")
+    tok_remaining = _int("x-ratelimit-remaining-tokens")
+
+    _last_usage = {
+        "requests_limit":     req_limit,
+        "requests_remaining": req_remaining,
+        "requests_used":      (req_limit - req_remaining) if (req_limit is not None and req_remaining is not None) else None,
+        "requests_reset":     hdrs.get("x-ratelimit-reset-requests"),
+        "tokens_limit":       tok_limit,
+        "tokens_remaining":   tok_remaining,
+        "tokens_used":        (tok_limit - tok_remaining) if (tok_limit is not None and tok_remaining is not None) else None,
+        "tokens_reset":       hdrs.get("x-ratelimit-reset-tokens"),
+        "last_updated":       datetime.now(timezone.utc).isoformat(),
+    }
+
+    # ── Parse response ────────────────────────────────────────────────────────
+    response = raw.parse()
 
     # Convert Pydantic/SDK objects → plain dicts for JSON serialisation.
     # Newer Groq SDK versions may return dicts directly; older ones return objects.

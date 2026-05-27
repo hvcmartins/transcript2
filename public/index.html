@@ -34,6 +34,34 @@
         <span class="status-dot"></span>
         <span class="status-text">Connected</span>
       </div>
+
+      <!-- Groq API usage — shown after first transcription -->
+      <div class="usage-panel" id="usagePanel" hidden>
+        <div class="usage-title">Groq Usage</div>
+
+        <div class="usage-row" id="usageReqRow" hidden>
+          <div class="usage-labels">
+            <span>Requests</span>
+            <span id="usageReqNums"></span>
+          </div>
+          <div class="usage-track">
+            <div class="usage-fill" id="usageReqFill"></div>
+          </div>
+        </div>
+
+        <div class="usage-row" id="usageAudioRow" hidden>
+          <div class="usage-labels">
+            <span>Audio</span>
+            <span id="usageAudioNums"></span>
+          </div>
+          <div class="usage-track">
+            <div class="usage-fill" id="usageAudioFill"></div>
+          </div>
+        </div>
+
+        <div class="usage-reset" id="usageReset"></div>
+      </div>
+
       <p class="powered-by">Powered by Groq Whisper</p>
     </div>
   </aside>

@@ -49,6 +49,15 @@ const el = {
   historyEmpty:      $('historyEmpty'),
   apiStatus:         $('apiStatus'),
   toastContainer:    $('toastContainer'),
+  // Usage bar
+  usagePanel:        $('usagePanel'),
+  usageReqRow:       $('usageReqRow'),
+  usageReqNums:      $('usageReqNums'),
+  usageReqFill:      $('usageReqFill'),
+  usageAudioRow:     $('usageAudioRow'),
+  usageAudioNums:    $('usageAudioNums'),
+  usageAudioFill:    $('usageAudioFill'),
+  usageReset:        $('usageReset'),
 };
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
@@ -95,6 +104,7 @@ function handleWsMessage(msg) {
       loadTranscription(msg.id);
     }, 600);
     refreshHistory();
+    loadUsage();
   } else if (msg.type === 'error') {
     stopPolling();
     el.progressPanel.hidden = true;
@@ -124,6 +134,7 @@ function startPolling(id) {
           loadTranscription(id);
         }, 600);
         refreshHistory();
+        loadUsage();
       } else if (data.status === 'failed') {
         stopPolling();
         el.progressPanel.hidden = true;
@@ -274,13 +285,28 @@ async function loadTranscription(id) {
 
     el.segmentView.innerHTML = '';
     const segments = data.segments || [];
+    const hasSpeakers = segments.some(s => s.speaker);
 
     if (segments.length > 0) {
+      let lastSpeaker = null;
       segments.forEach(seg => {
         const div = document.createElement('div');
         div.className = 'segment';
-        div.innerHTML = `<span class="seg-time">${secondsToMMSS(seg.start)}</span>
-                         <span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
+
+        const timeHtml = `<span class="seg-time">${secondsToMMSS(seg.start)}</span>`;
+
+        if (hasSpeakers && seg.speaker) {
+          // Only show badge when speaker changes
+          const spkClass = 'spk-' + (seg.speaker.slice(-1).toLowerCase());
+          const badgeHtml = (seg.speaker !== lastSpeaker)
+            ? `<span class="seg-speaker ${spkClass}">${escapeHtml(seg.speaker)}</span>`
+            : '';
+          lastSpeaker = seg.speaker;
+          div.innerHTML = `${timeHtml}<div class="seg-content">${badgeHtml}<span class="seg-text">${escapeHtml(seg.text.trim())}</span></div>`;
+        } else {
+          div.innerHTML = `${timeHtml}<span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
+        }
+
         el.segmentView.appendChild(div);
       });
     } else if (data.transcript) {
@@ -392,6 +418,65 @@ function renderHistory(items) {
   });
 }
 
+// ─── Groq API Usage Bar ───────────────────────────────────────────────────────
+function _usageFillClass(pct) {
+  if (pct >= 90) return 'crit';
+  if (pct >= 70) return 'warn';
+  return '';
+}
+
+function _resetLabel(resetStr) {
+  if (!resetStr) return '';
+  // Groq may send an ISO timestamp or a relative string like "1m30s"
+  try {
+    const ts = new Date(resetStr);
+    if (!isNaN(ts)) {
+      const diff = Math.max(0, Math.round((ts - Date.now()) / 1000));
+      if (diff <= 0) return 'Reset: now';
+      const m = Math.floor(diff / 60), s = diff % 60;
+      return m > 0 ? `Reset in ${m}m ${s}s` : `Reset in ${s}s`;
+    }
+  } catch (_) {}
+  return `Reset: ${resetStr}`;
+}
+
+async function loadUsage() {
+  try {
+    const res = await fetch('/api/usage');
+    if (!res.ok) return;
+    const d = await res.json();
+    if (!d.last_updated) return;   // no data yet
+
+    el.usagePanel.hidden = false;
+
+    // ── Requests bar ──────────────────────────────────────────────────────────
+    if (d.requests_limit != null && d.requests_remaining != null) {
+      const used = d.requests_limit - d.requests_remaining;
+      const pct  = Math.min(100, Math.round(used / d.requests_limit * 100));
+      el.usageReqNums.textContent = `${d.requests_remaining} left / ${d.requests_limit}`;
+      el.usageReqFill.style.width = pct + '%';
+      el.usageReqFill.className = 'usage-fill ' + _usageFillClass(pct);
+      el.usageReqRow.hidden = false;
+    }
+
+    // ── Audio seconds bar ─────────────────────────────────────────────────────
+    if (d.tokens_limit != null && d.tokens_remaining != null) {
+      const used = d.tokens_limit - d.tokens_remaining;
+      const pct  = Math.min(100, Math.round(used / d.tokens_limit * 100));
+      const fmtSec = (s) => s >= 3600 ? `${(s/3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s/60)}m` : `${s}s`;
+      el.usageAudioNums.textContent = `${fmtSec(d.tokens_remaining)} left / ${fmtSec(d.tokens_limit)}`;
+      el.usageAudioFill.style.width = pct + '%';
+      el.usageAudioFill.className = 'usage-fill ' + _usageFillClass(pct);
+      el.usageAudioRow.hidden = false;
+    }
+
+    // ── Reset label ───────────────────────────────────────────────────────────
+    const resetStr = d.requests_reset || d.tokens_reset || '';
+    el.usageReset.textContent = _resetLabel(resetStr);
+
+  } catch (_) {}
+}
+
 // ─── Metadata (models + languages) ───────────────────────────────────────────
 async function loadMeta() {
   try {
@@ -415,3 +500,4 @@ function showToast(message, type = 'info', duration = 5000) {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 connectWS();
 loadMeta();
+loadUsage();

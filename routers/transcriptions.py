@@ -140,6 +140,18 @@ async def _run_transcription(
             transcribe_file, file_path, language, model
         )
 
+        # 80 % — transcription done, optional diarization
+        await _send(80)
+
+        segments = result["segments"]
+        try:
+            from services.diarization import diarize, DIARIZATION_ENABLED
+            if DIARIZATION_ENABLED and segments:
+                await _send(85, "progress")
+                segments = await asyncio.to_thread(diarize, file_path, segments)
+        except Exception as diar_exc:
+            print(f"Diarization skipped [{id}]: {diar_exc}")
+
         # 90 % — storing result
         await _send(90)
 
@@ -147,7 +159,7 @@ async def _run_transcription(
             "status":     "completed",
             "progress":   100,
             "transcript": result["text"],
-            "segments":   json.dumps(result["segments"]),
+            "segments":   json.dumps(segments),
             "words":      json.dumps(result["words"]),
             "duration":   result["duration"],
         })
@@ -158,7 +170,7 @@ async def _run_transcription(
             "status":     "completed",
             "progress":   100,
             "transcript": result["text"],
-            "segments":   result["segments"],
+            "segments":   segments,
             "words":      result["words"],
             "duration":   result["duration"],
             "language":   result["language"],

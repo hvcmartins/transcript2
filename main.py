@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from routers import transcriptions, exports
 from services.database import init_database
+from services.groq_service import get_last_usage
 
 # ── Directories ──────────────────────────────────────────────────────────────
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
@@ -81,6 +82,12 @@ app.include_router(exports.router,        prefix="/api/exports")
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "app": "rdtlTranscript", "version": "1.0.0"}
+
+
+@app.get("/api/usage")
+async def usage():
+    """Return the Groq rate-limit info captured from the most recent API call."""
+    return get_last_usage()
 
 
 # ── Static frontend (must come last) ─────────────────────────────────────────
