@@ -1,28 +1,33 @@
 """
-Intel GPU transcription via OpenVINO GenAI.
+Intel GPU transcription via optimum-intel + OpenVINO.
 
 Uses pre-converted Whisper INT8 models from HuggingFace (OpenVINO/* org).
-Models are downloaded on first use and cached in MODELS_DIR/openvino/<id>/.
+These models were created with optimum-intel and must be loaded with it —
+openvino-genai's WhisperPipeline is incompatible with this format.
 
-Requirements (installed separately from base image):
-  pip install openvino-genai huggingface-hub
+Requirements: pip install optimum[openvino] transformers
+Build with Dockerfile.openvino (Ubuntu 24.04 + Intel GPU drivers).
 
 Environment variables:
-  MODELS_DIR      — model cache root         (default: models)
-  OPENVINO_DEVICE — "GPU" | "CPU" | "AUTO"   (default: GPU)
+  MODELS_DIR      — HuggingFace cache root  (default: models)
+  OPENVINO_DEVICE — "GPU" | "CPU" | "AUTO"  (default: AUTO)
 """
 
 import os
 from pathlib import Path
 
 MODELS_DIR      = Path(os.getenv("MODELS_DIR", "models"))
-OPENVINO_DEVICE = os.getenv("OPENVINO_DEVICE", "GPU")
+OPENVINO_DEVICE = os.getenv("OPENVINO_DEVICE", "AUTO")
+
+_HF_CACHE = MODELS_DIR / "openvino_hf"
 
 SUPPORTED_OV_MODELS = [
-    {"id": "base",     "hf_id": "OpenVINO/whisper-base-int8-ov",     "label": "Base — ~100 MB · fast"},
-    {"id": "small",    "hf_id": "OpenVINO/whisper-small-int8-ov",    "label": "Small — ~230 MB · balanced ✓"},
-    {"id": "medium",   "hf_id": "OpenVINO/whisper-medium-int8-ov",   "label": "Medium — ~750 MB · accurate"},
-    {"id": "large-v3", "hf_id": "OpenVINO/whisper-large-v3-int8-ov", "label": "Large v3 — ~1.5 GB · best"},
+    {"id": "tiny",           "hf_id": "OpenVINO/whisper-tiny-int8-ov",               "label": "Tiny — ~40 MB · fastest"},
+    {"id": "base",           "hf_id": "OpenVINO/whisper-base-int8-ov",               "label": "Base — ~80 MB · fast"},
+    {"id": "small",          "hf_id": "OpenVINO/whisper-small-int8-ov",              "label": "Small — ~240 MB · balanced ✓"},
+    {"id": "medium",         "hf_id": "OpenVINO/whisper-medium-int8-ov",             "label": "Medium — ~780 MB · accurate"},
+    {"id": "large-v3-turbo", "hf_id": "OpenVINO/whisper-large-v3-turbo-int8-ov",    "label": "Large v3 Turbo — ~900 MB · fast+accurate"},
+    {"id": "large-v3",       "hf_id": "OpenVINO/whisper-large-v3-int8-ov",          "label": "Large v3 — ~1.6 GB · best"},
 ]
 
 _pipeline_cache: dict = {}
@@ -37,7 +42,7 @@ def _hf_id(model_id: str) -> str:
 
 def _is_available() -> bool:
     try:
-        import openvino_genai  # noqa: F401
+        from optimum.intel import OVModelForSpeechSeq2Seq  # noqa: F401
         return True
     except ImportError:
         return False
@@ -47,33 +52,40 @@ OPENVINO_AVAILABLE = _is_available()
 
 
 def is_ov_model_cached(model_id: str) -> bool:
-    model_dir = MODELS_DIR / "openvino" / model_id
+    hf_id = _hf_id(model_id)
+    cache_name = "models--" + hf_id.replace("/", "--")
+    model_dir = _HF_CACHE / cache_name
     return model_dir.exists() and any(model_dir.iterdir())
 
 
 def _get_pipeline(model_id: str):
     global _pipeline_cache
     if model_id not in _pipeline_cache:
-        import openvino_genai as ov_genai
-        model_path = MODELS_DIR / "openvino" / model_id
-        model_path.mkdir(parents=True, exist_ok=True)
-        if not any(model_path.iterdir()):
-            from huggingface_hub import snapshot_download
-            snapshot_download(
-                repo_id=_hf_id(model_id),
-                local_dir=str(model_path),
-            )
-        try:
-            _pipeline_cache[model_id] = ov_genai.WhisperPipeline(str(model_path), OPENVINO_DEVICE)
-        except Exception as e:
-            # Corrupt/incomplete download — wipe the cache dir so next call re-downloads
-            import shutil
-            shutil.rmtree(str(model_path), ignore_errors=True)
-            raise RuntimeError(
-                f"Failed to load OpenVINO model '{model_id}' "
-                f"(cached copy deleted — will re-download on next attempt). "
-                f"Original error: {e}"
-            ) from e
+        from optimum.intel import OVModelForSpeechSeq2Seq
+        from transformers import AutoProcessor, pipeline as hf_pipeline
+
+        hf_id = _hf_id(model_id)
+        _HF_CACHE.mkdir(parents=True, exist_ok=True)
+
+        model = OVModelForSpeechSeq2Seq.from_pretrained(
+            hf_id,
+            device=OPENVINO_DEVICE,
+            cache_dir=str(_HF_CACHE),
+        )
+        processor = AutoProcessor.from_pretrained(
+            hf_id,
+            cache_dir=str(_HF_CACHE),
+        )
+        _pipeline_cache[model_id] = hf_pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            tokenizer=processor.tokenizer,
+            feature_extractor=processor.feature_extractor,
+            max_new_tokens=448,
+            chunk_length_s=30,
+            stride_length_s=5,
+            return_timestamps=True,
+        )
     return _pipeline_cache[model_id]
 
 
@@ -89,43 +101,42 @@ def transcribe_openvino(
     """
     if not OPENVINO_AVAILABLE:
         raise RuntimeError(
-            "openvino-genai is not installed. "
-            "Rebuild the image with --build-arg WITH_OPENVINO=true."
+            "optimum-intel is not installed. Build the image with Dockerfile.openvino."
         )
 
     import librosa
-    import openvino_genai as ov_genai
 
     if progress_cb:
         progress_cb(32)
 
-    pipeline = _get_pipeline(model_id)
+    pipe = _get_pipeline(model_id)
 
-    # librosa normalises to [-1, 1] float32 at the requested sample rate
     audio, _ = librosa.load(file_path, sr=16000, mono=True)
-
-    config = ov_genai.WhisperGenerationConfig()
-    config.return_timestamps = True
-    if language and language != "auto":
-        config.language = f"<|{language}|>"
+    duration  = float(len(audio)) / 16000.0
 
     if progress_cb:
         progress_cb(38)
 
-    result = pipeline.generate(audio.tolist(), config)
+    gen_kwargs: dict = {}
+    if language and language != "auto":
+        gen_kwargs["language"] = language
+        gen_kwargs["task"]     = "transcribe"
+
+    result = pipe(audio, generate_kwargs=gen_kwargs or None)
 
     if progress_cb:
         progress_cb(83)
 
-    full_text = result.texts[0] if result.texts else ""
-    duration   = float(len(audio)) / 16000.0
-
+    full_text   = result.get("text", "").strip()
+    raw_chunks  = result.get("chunks", [])
     segments: list[dict] = []
-    if hasattr(result, "chunks") and result.chunks:
-        for chunk in result.chunks:
-            start = float(getattr(chunk, "start_ts", 0.0) or 0.0)
-            end   = float(getattr(chunk, "end_ts",   0.0) or 0.0)
-            text  = str(getattr(chunk, "text", ""))
+
+    if raw_chunks:
+        for chunk in raw_chunks:
+            ts    = chunk.get("timestamp") or (0.0, 0.0)
+            start = float(ts[0]) if ts[0] is not None else 0.0
+            end   = float(ts[1]) if ts[1] is not None else start
+            text  = chunk.get("text", "").strip()
             segments.append({"start": start, "end": end, "text": text})
             duration = max(duration, end)
     else:

@@ -36,7 +36,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install OpenVINO GenAI
-RUN pip install --no-cache-dir openvino-genai
+RUN pip install --no-cache-dir "optimum[openvino]" transformers
 
 # Pre-warm librosa/numba JIT cache
 RUN python3 -c "\

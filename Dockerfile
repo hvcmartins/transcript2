@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # pip install is required; Intel GPU apt packages are attempted but non-fatal —
 # set OPENVINO_DEVICE=CPU or AUTO if the GPU block fails on your distro.
 RUN if [ "$WITH_OPENVINO" = "true" ]; then \
-      pip install --no-cache-dir openvino-genai; \
+      pip install --no-cache-dir "optimum[openvino]" transformers; \
       ( \
         apt-get update && \
         apt-get install -y --no-install-recommends gnupg curl ca-certificates && \
