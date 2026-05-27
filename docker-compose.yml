@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  transcribify:
+    build: .
+    image: transcribify:latest
+    container_name: transcribify
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"          # Change left side to use a different host port
+
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - PORT=3000
+      - HOST=0.0.0.0
+      - UPLOAD_DIR=/app/uploads
+      - DATA_DIR=/app/data
+
+    volumes:
+      - transcribify_uploads:/app/uploads
+      - transcribify_data:/app/data
+      # Alternatively, use bind mounts for easier access:
+      # - ./data/uploads:/app/uploads
+      # - ./data/db:/app/data
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  transcribify_uploads:
+  transcribify_data:

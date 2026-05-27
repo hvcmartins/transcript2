@@ -1,0 +1,48 @@
+# ─── Stage 1: Builder ───────────────────────────────────────────────────────
+FROM node:24-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install --omit=dev
+
+# ─── Stage 2: Runtime ───────────────────────────────────────────────────────
+FROM node:24-alpine
+
+LABEL maintainer="Transcribify"
+LABEL description="TurboScribe clone powered by Groq Whisper"
+LABEL org.opencontainers.image.title="Transcribify"
+LABEL org.opencontainers.image.description="AI transcription service using Groq Whisper"
+
+# Create non-root user
+RUN addgroup -S transcribify && adduser -S transcribify -G transcribify
+
+WORKDIR /app
+
+# Copy dependencies from builder
+COPY --from=builder /app/node_modules ./node_modules
+
+# Copy application source
+COPY --chown=transcribify:transcribify . .
+
+# Create required directories and set permissions
+RUN mkdir -p /app/uploads /app/data && \
+    chown -R transcribify:transcribify /app/uploads /app/data
+
+USER transcribify
+
+# Volumes for persistent data
+VOLUME ["/app/uploads", "/app/data"]
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOST=0.0.0.0 \
+    UPLOAD_DIR=/app/uploads \
+    DATA_DIR=/app/data
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
+
+CMD ["node", "server.js"]
