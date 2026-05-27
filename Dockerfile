@@ -3,7 +3,7 @@ FROM node:24-alpine
 LABEL maintainer="rdtlTranscript"
 LABEL description="AI transcription powered by Groq Whisper — no GPU required"
 
-# Build tools for native addons (better-sqlite3), then runtime lib
+# Build tools required by better-sqlite3 native addon
 RUN apk add --no-cache python3 make g++ libstdc++
 
 # Create non-root user
@@ -11,14 +11,16 @@ RUN addgroup -S rdtl && adduser -S rdtl -G rdtl
 
 WORKDIR /app
 
-# Install dependencies first (layer cache)
-COPY package.json ./
-RUN npm install --omit=dev --prefer-offline 2>&1
+# Copy both manifests so npm ci can do a clean, reproducible install
+COPY package.json package-lock.json ./
 
-# Copy application source
+# npm ci: uses lock file, faster, no network guessing, no --prefer-offline needed
+RUN npm ci --omit=dev
+
+# Copy application source (after install to keep layer cache valid)
 COPY --chown=rdtl:rdtl . .
 
-# Create persistent data directories
+# Create persistent data directories and fix ownership
 RUN mkdir -p /app/uploads /app/data && \
     chown -R rdtl:rdtl /app/uploads /app/data /app/node_modules
 
