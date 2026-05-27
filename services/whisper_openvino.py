@@ -122,13 +122,19 @@ def transcribe_openvino(
         gen_kwargs["language"] = language
         gen_kwargs["task"]     = "transcribe"
 
-    result = pipe(audio, generate_kwargs=gen_kwargs or None)
+    # Pass audio as dict so the pipeline knows the sampling rate
+    result = pipe(
+        {"array": audio, "sampling_rate": 16000},
+        generate_kwargs=gen_kwargs,
+    )
 
     if progress_cb:
         progress_cb(83)
 
-    full_text   = result.get("text", "").strip()
-    raw_chunks  = result.get("chunks", [])
+    full_text   = (result.get("text") or "").strip()
+    # Use `or []` — get() only returns the default when the key is absent,
+    # but the pipeline may return chunks=None explicitly.
+    raw_chunks  = result.get("chunks") or []
     segments: list[dict] = []
 
     if raw_chunks:
