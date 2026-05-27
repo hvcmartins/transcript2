@@ -80,11 +80,39 @@
               <option value="auto">Auto-detect</option>
             </select>
           </div>
-          <div class="option-group">
-            <label for="modelSelect">Whisper Model</label>
+          <div class="option-group" id="groqModelGroup">
+            <label for="modelSelect">Whisper Model (Groq)</label>
             <select id="modelSelect">
               <option value="whisper-large-v3-turbo">Whisper Large v3 Turbo (fast)</option>
             </select>
+          </div>
+          <div class="option-group" id="localModelGroup" hidden>
+            <label for="localModelSelect">Local Model</label>
+            <select id="localModelSelect">
+              <option value="small">Small — 466 MB · balanced ✓</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Transcription engine row -->
+        <div class="source-row">
+          <div class="source-label">Engine</div>
+          <div class="source-options" id="sourceOptions">
+            <label class="source-btn active" data-value="groq">
+              <input type="radio" name="source" value="groq" checked hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 15a4 4 0 0 0 4 4h9a5 5 0 1 0-.1-9.999 5.002 5.002 0 0 0-9.78 2.096A4.001 4.001 0 0 0 3 15z"/></svg>
+              Groq Cloud
+            </label>
+            <label class="source-btn" data-value="auto">
+              <input type="radio" name="source" value="auto" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+              Auto (Groq → Local)
+            </label>
+            <label class="source-btn" data-value="local">
+              <input type="radio" name="source" value="local" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              Local CPU
+            </label>
           </div>
         </div>
 

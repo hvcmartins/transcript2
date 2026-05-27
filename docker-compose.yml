@@ -16,10 +16,17 @@ services:
       - HOST=0.0.0.0
       - UPLOAD_DIR=/app/uploads
       - DATA_DIR=/app/data
+      - MODELS_DIR=/app/models
+      - ENABLE_DIARIZATION=true
+      - LOCAL_DEVICE=cpu           # cpu | cuda (no Intel iGPU support in ctranslate2)
+      - LOCAL_COMPUTE_TYPE=int8    # int8 = fastest on Intel CPUs with AVX2
 
     volumes:
       - /mnt/user/appdata/rdtlTranscript/uploads:/app/uploads
       - /mnt/user/appdata/rdtlTranscript/data:/app/data
+      # Model weights are large — mount a persistent host path so they
+      # survive container rebuilds (small = 466 MB, large-v3 = 3 GB)
+      - /mnt/user/appdata/rdtlTranscript/models:/app/models
 
     healthcheck:
       test: ["CMD", "python", "-c",

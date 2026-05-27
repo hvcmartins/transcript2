@@ -14,6 +14,7 @@ from services.database import (
     update_transcription,
 )
 from services.groq_service import SUPPORTED_LANGUAGES, SUPPORTED_MODELS, transcribe_file, preprocess_audio
+from services.local_transcription import SUPPORTED_LOCAL_MODELS, transcribe_locally, is_model_cached
 
 router = APIRouter()
 
@@ -32,7 +33,15 @@ ALLOWED_EXTENSIONS = {
 # ── Meta ──────────────────────────────────────────────────────────────────────
 @router.get("/meta")
 async def get_meta():
-    return {"models": SUPPORTED_MODELS, "languages": SUPPORTED_LANGUAGES}
+    local_models_with_cache = [
+        {**m, "cached": is_model_cached(m["id"])}
+        for m in SUPPORTED_LOCAL_MODELS
+    ]
+    return {
+        "models":        SUPPORTED_MODELS,
+        "languages":     SUPPORTED_LANGUAGES,
+        "local_models":  local_models_with_cache,
+    }
 
 
 # ── List ──────────────────────────────────────────────────────────────────────
@@ -60,8 +69,10 @@ async def create(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    language: str = Form("auto"),
-    model: str = Form("whisper-large-v3-turbo"),
+    language: str    = Form("auto"),
+    model: str       = Form("whisper-large-v3-turbo"),
+    source: str      = Form("groq"),   # "groq" | "local" | "auto"
+    local_model: str = Form("small"),
 ):
     suffix = Path(file.filename or "").suffix.lower() or ".audio"
     if suffix not in ALLOWED_EXTENSIONS:
@@ -96,7 +107,8 @@ async def create(
     # Kick off background transcription
     manager = request.app.state.manager
     background_tasks.add_task(
-        _run_transcription, record_id, str(file_path), language, model, manager
+        _run_transcription, record_id, str(file_path),
+        language, model, manager, source, local_model
     )
 
     return record
@@ -116,11 +128,12 @@ async def delete(id: str):
 
 # ── Background worker ─────────────────────────────────────────────────────────
 async def _run_transcription(
-    id: str, file_path: str, language: str, model: str, manager
+    id: str, file_path: str, language: str, model: str, manager,
+    source: str = "groq", local_model: str = "small",
 ) -> None:
     """
-    Runs the Groq API call in a thread pool (non-blocking) and broadcasts
-    progress/completion over WebSocket.
+    Orchestrates preprocessing → transcription (Groq / local / auto) →
+    diarization, broadcasting WebSocket progress throughout.
     """
 
     async def _send(pct: int, msg_type: str = "progress", extra: dict | None = None):
@@ -136,30 +149,63 @@ async def _run_transcription(
     is_temp = False
 
     try:
-        # ── Step 1: preprocess audio (strip video, downsample, compress) ──────
+        # ── Step 1: preprocess (strip video, 16 kHz mono MP3) ─────────────────
         await _send(10, extra={"label": "Preprocessing audio…"})
         processed_path, is_temp = await asyncio.to_thread(preprocess_audio, file_path)
 
-        # ── Step 2: Groq transcription ────────────────────────────────────────
-        await _send(30, extra={"label": "Transcribing with Groq…"})
-        result: dict = await asyncio.to_thread(
-            transcribe_file, processed_path, language, model
-        )
+        # ── Step 2: transcribe ────────────────────────────────────────────────
+        result: dict | None = None
 
-        # ── Step 3: optional speaker diarization ─────────────────────────────
+        # Groq attempt
+        if source in ("groq", "auto"):
+            try:
+                await _send(30, extra={"label": "Transcribing with Groq…"})
+                result = await asyncio.to_thread(
+                    transcribe_file, processed_path, language, model
+                )
+            except Exception as groq_exc:
+                if source == "groq":
+                    raise                   # hard failure — propagate
+                # "auto" mode: log and fall through to local
+                print(f"Groq failed for [{id}], falling back to local: {groq_exc}")
+                await _send(30, extra={"label": "Groq unavailable — switching to local CPU…"})
+
+        # Local attempt (source=="local" or Groq failed in "auto" mode)
+        if result is None:
+            # First run downloads the model (~466 MB for small) — warn the user
+            from services.local_transcription import is_model_cached
+            if not is_model_cached(local_model):
+                await _send(28, extra={"label": f"Downloading {local_model} model (first time)…"})
+
+            await _send(30, extra={"label": f"Transcribing locally ({local_model})…"})
+
+            # Thread-safe progress bridge: local transcription calls this from
+            # the worker thread; we schedule the coroutine on the event loop.
+            loop = asyncio.get_event_loop()
+
+            def _local_progress(pct: int):
+                asyncio.run_coroutine_threadsafe(
+                    _send(pct, extra={"label": f"Transcribing locally ({local_model})…"}),
+                    loop,
+                )
+
+            result = await asyncio.to_thread(
+                transcribe_locally, processed_path, language, local_model, _local_progress
+            )
+
+        # ── Step 3: speaker diarization ───────────────────────────────────────
         await _send(80, extra={"label": "Analysing speakers…"})
 
         segments = result["segments"]
         try:
             from services.diarization import diarize, DIARIZATION_ENABLED
             if DIARIZATION_ENABLED and segments:
-                await _send(85, "progress")
                 segments = await asyncio.to_thread(diarize, file_path, segments)
         except Exception as diar_exc:
             print(f"Diarization skipped [{id}]: {diar_exc}")
 
-        # 90 % — storing result
-        await _send(90)
+        # ── Step 4: persist ───────────────────────────────────────────────────
+        await _send(90, extra={"label": "Saving…"})
 
         update_transcription(id, {
             "status":     "completed",

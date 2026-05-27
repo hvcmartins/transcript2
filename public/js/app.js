@@ -32,6 +32,10 @@ const el = {
   clearFile:         $('clearFile'),
   languageSelect:    $('languageSelect'),
   modelSelect:       $('modelSelect'),
+  groqModelGroup:    $('groqModelGroup'),
+  localModelGroup:   $('localModelGroup'),
+  localModelSelect:  $('localModelSelect'),
+  sourceOptions:     $('sourceOptions'),
   transcribeBtn:     $('transcribeBtn'),
   progressPanel:     $('progressPanel'),
   progressLabel:     $('progressLabel'),
@@ -217,10 +221,13 @@ el.dropZone.addEventListener('drop', (e) => {
 el.transcribeBtn.addEventListener('click', async () => {
   if (!state.selectedFile) return;
 
+  const src = getSource();
   const formData = new FormData();
-  formData.append('file', state.selectedFile);
-  formData.append('language', el.languageSelect.value || 'auto');
-  formData.append('model', el.modelSelect.value || 'whisper-large-v3-turbo');
+  formData.append('file',        state.selectedFile);
+  formData.append('language',    el.languageSelect.value   || 'auto');
+  formData.append('model',       el.modelSelect.value      || 'whisper-large-v3-turbo');
+  formData.append('source',      src);
+  formData.append('local_model', el.localModelSelect.value || 'small');
 
   el.optionsPanel.hidden = true;
   el.progressPanel.hidden = false;
@@ -498,14 +505,43 @@ async function loadUsage() {
   } catch (_) {}
 }
 
+// ─── Source (engine) selector ─────────────────────────────────────────────────
+function getSource() {
+  return el.sourceOptions.querySelector('.source-btn.active')?.dataset.value || 'groq';
+}
+
+function initSourceSelector() {
+  el.sourceOptions.querySelectorAll('.source-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      el.sourceOptions.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      btn.querySelector('input').checked = true;
+      const src = btn.dataset.value;
+      // Show/hide model selectors based on engine
+      el.groqModelGroup.hidden  = (src === 'local');
+      el.localModelGroup.hidden = (src === 'groq');
+    });
+  });
+}
+
 // ─── Metadata (models + languages) ───────────────────────────────────────────
 async function loadMeta() {
   try {
     const res = await fetch('/api/transcriptions/meta');
     if (!res.ok) return;
-    const { models, languages } = await res.json();
-    el.languageSelect.innerHTML = languages.map(l => `<option value="${l.code}">${l.label}</option>`).join('');
-    el.modelSelect.innerHTML    = models.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
+    const { models, languages, local_models } = await res.json();
+    el.languageSelect.innerHTML = languages.map(l =>
+      `<option value="${l.code}">${l.label}</option>`).join('');
+    el.modelSelect.innerHTML = models.map(m =>
+      `<option value="${m.id}">${m.label}</option>`).join('');
+    if (local_models?.length) {
+      el.localModelSelect.innerHTML = local_models.map(m => {
+        const cached = m.cached ? ' ✓ cached' : '';
+        return `<option value="${m.id}">${m.label}${cached}</option>`;
+      }).join('');
+      // Default to small
+      el.localModelSelect.value = 'small';
+    }
   } catch (_) {}
 }
 
@@ -522,3 +558,4 @@ function showToast(message, type = 'info', duration = 5000) {
 connectWS();
 loadMeta();
 loadUsage();
+initSourceSelector();
