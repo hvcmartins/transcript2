@@ -23,7 +23,7 @@ A **TurboScribe clone** powered by [Groq](https://groq.com) Whisper. Drag-and-dr
 
 ```bash
 # 1. Clone & install
-git clone https://github.com/youruser/transcribify
+git clone https://github.com/hvcmartins/transcript2
 cd transcribify
 npm install
 
@@ -172,7 +172,7 @@ docker-compose up -d
   <Network>bridge</Network>
   <Privileged>false</Privileged>
   <Support/>
-  <Project>https://github.com/youruser/transcribify</Project>
+  <Project>https://github.com/hvcmartins/transcript2</Project>
   <Overview>TurboScribe clone powered by Groq Whisper AI. Transcribe audio and video files with timestamps and multiple export formats.</Overview>
   <Category>Productivity: MediaApp:</Category>
   <WebUI>http://[IP]:[PORT:3000]/</WebUI>
