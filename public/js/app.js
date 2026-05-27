@@ -1,14 +1,13 @@
 // ─── UUID helper (works on HTTP, not just HTTPS) ─────────────────────────────
 function generateUUID() {
   try { return crypto.randomUUID(); } catch (_) {}
-  // Fallback for non-secure contexts (plain HTTP on local network)
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = Math.random() * 16 | 0;
     return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
   });
 }
 
-// ─── State ──────────────────────────────────────────────────────────────────
+// ─── State ───────────────────────────────────────────────────────────────────
 const state = {
   currentView: 'upload',
   selectedFile: null,
@@ -16,47 +15,43 @@ const state = {
   ws: null,
   sessionId: generateUUID(),
   history: [],
+  pollTimer: null,
 };
 
 // ─── DOM Refs ────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 const el = {
-  // Nav
-  navBtns: document.querySelectorAll('.nav-btn'),
-  views: { upload: $('uploadView'), history: $('historyView'), transcript: $('transcriptView') },
-  // Upload
-  dropZone: $('dropZone'),
-  fileInput: $('fileInput'),
-  browseBtn: $('browseBtn'),
-  optionsPanel: $('optionsPanel'),
-  selectedFileName: $('selectedFileName'),
-  selectedFileSize: $('selectedFileSize'),
-  clearFile: $('clearFile'),
-  languageSelect: $('languageSelect'),
-  modelSelect: $('modelSelect'),
-  transcribeBtn: $('transcribeBtn'),
-  progressPanel: $('progressPanel'),
-  progressLabel: $('progressLabel'),
-  progressBar: $('progressBar'),
-  progressFilename: $('progressFilename'),
-  // Transcript
-  backBtn: $('backBtn'),
-  metaFilename: $('metaFilename'),
-  metaDuration: $('metaDuration'),
-  metaLanguage: $('metaLanguage'),
-  exportBtn: $('exportBtn'),
-  exportMenu: $('exportMenu'),
-  copyBtn: $('copyBtn'),
-  segmentView: $('segmentView'),
-  // History
-  historyList: $('historyList'),
-  historyEmpty: $('historyEmpty'),
-  // Status
-  apiStatus: $('apiStatus'),
-  toastContainer: $('toastContainer'),
+  navBtns:           document.querySelectorAll('.nav-btn'),
+  views:             { upload: $('uploadView'), history: $('historyView'), transcript: $('transcriptView') },
+  dropZone:          $('dropZone'),
+  fileInput:         $('fileInput'),
+  browseBtn:         $('browseBtn'),
+  optionsPanel:      $('optionsPanel'),
+  selectedFileName:  $('selectedFileName'),
+  selectedFileSize:  $('selectedFileSize'),
+  clearFile:         $('clearFile'),
+  languageSelect:    $('languageSelect'),
+  modelSelect:       $('modelSelect'),
+  transcribeBtn:     $('transcribeBtn'),
+  progressPanel:     $('progressPanel'),
+  progressLabel:     $('progressLabel'),
+  progressBar:       $('progressBar'),
+  progressFilename:  $('progressFilename'),
+  backBtn:           $('backBtn'),
+  metaFilename:      $('metaFilename'),
+  metaDuration:      $('metaDuration'),
+  metaLanguage:      $('metaLanguage'),
+  exportBtn:         $('exportBtn'),
+  exportMenu:        $('exportMenu'),
+  copyBtn:           $('copyBtn'),
+  segmentView:       $('segmentView'),
+  historyList:       $('historyList'),
+  historyEmpty:      $('historyEmpty'),
+  apiStatus:         $('apiStatus'),
+  toastContainer:    $('toastContainer'),
 };
 
-// ─── WebSocket ───────────────────────────────────────────────────────────────
+// ─── WebSocket ────────────────────────────────────────────────────────────────
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -67,8 +62,7 @@ function connectWS() {
   });
 
   ws.addEventListener('message', (e) => {
-    const msg = JSON.parse(e.data);
-    handleWsMessage(msg);
+    try { handleWsMessage(JSON.parse(e.data)); } catch (_) {}
   });
 
   ws.addEventListener('close', () => {
@@ -88,9 +82,12 @@ function setStatus(ok) {
 }
 
 function handleWsMessage(msg) {
+  if (msg.id && msg.id !== state.currentTranscriptionId) return;
+
   if (msg.type === 'progress') {
     updateProgress(msg.progress, 'Transcribing…');
   } else if (msg.type === 'complete') {
+    stopPolling();
     updateProgress(100, 'Done!');
     setTimeout(() => {
       el.progressPanel.hidden = true;
@@ -99,10 +96,49 @@ function handleWsMessage(msg) {
     }, 600);
     refreshHistory();
   } else if (msg.type === 'error') {
+    stopPolling();
     el.progressPanel.hidden = true;
     el.optionsPanel.hidden = false;
-    showToast(`Error: ${msg.error}`, 'error');
+    showToast(`Error: ${msg.error}`, 'error', 8000);
     refreshHistory();
+  }
+}
+
+// ─── Polling fallback (in case WebSocket misses an event) ────────────────────
+function startPolling(id) {
+  stopPolling();
+  state.pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/transcriptions/${id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      if (data.status === 'processing') {
+        updateProgress(data.progress || 30, 'Transcribing…');
+      } else if (data.status === 'completed') {
+        stopPolling();
+        updateProgress(100, 'Done!');
+        setTimeout(() => {
+          el.progressPanel.hidden = true;
+          showToast('Transcription complete!', 'success');
+          loadTranscription(id);
+        }, 600);
+        refreshHistory();
+      } else if (data.status === 'failed') {
+        stopPolling();
+        el.progressPanel.hidden = true;
+        el.optionsPanel.hidden = false;
+        showToast(`Error: ${data.error_msg || 'Transcription failed'}`, 'error', 8000);
+        refreshHistory();
+      }
+    } catch (_) { /* network hiccup — try again next tick */ }
+  }, 2000);
+}
+
+function stopPolling() {
+  if (state.pollTimer) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
   }
 }
 
@@ -126,7 +162,7 @@ el.navBtns.forEach(btn => {
   btn.addEventListener('click', () => showView(btn.dataset.view));
 });
 
-// ─── File Selection ──────────────────────────────────────────────────────────
+// ─── File Selection ───────────────────────────────────────────────────────────
 function formatBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
@@ -134,9 +170,8 @@ function formatBytes(n) {
 }
 
 function getFileIcon(name) {
-  const ext = name.split('.').pop().toLowerCase();
-  const vid = ['mp4','mkv','mov','avi','webm','flv','wmv'];
-  return vid.includes(ext) ? '🎬' : '🎵';
+  const ext = (name || '').split('.').pop().toLowerCase();
+  return ['mp4','mkv','mov','avi','webm','flv','wmv'].includes(ext) ? '🎬' : '🎵';
 }
 
 function setSelectedFile(file) {
@@ -152,31 +187,13 @@ function setSelectedFile(file) {
   el.optionsPanel.hidden = false;
 }
 
-el.browseBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  el.fileInput.click();
-});
-
+el.browseBtn.addEventListener('click', (e) => { e.stopPropagation(); el.fileInput.click(); });
 el.dropZone.addEventListener('click', () => el.fileInput.click());
+el.fileInput.addEventListener('change', () => { if (el.fileInput.files[0]) setSelectedFile(el.fileInput.files[0]); });
+el.clearFile.addEventListener('click', (e) => { e.stopPropagation(); el.fileInput.value = ''; setSelectedFile(null); });
 
-el.fileInput.addEventListener('change', () => {
-  if (el.fileInput.files[0]) setSelectedFile(el.fileInput.files[0]);
-});
-
-el.clearFile.addEventListener('click', (e) => {
-  e.stopPropagation();
-  el.fileInput.value = '';
-  setSelectedFile(null);
-});
-
-// Drag & Drop
-el.dropZone.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  el.dropZone.classList.add('drag-over');
-});
-
-el.dropZone.addEventListener('dragleave', () => el.dropZone.classList.remove('drag-over'));
-
+el.dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); el.dropZone.classList.add('drag-over'); });
+el.dropZone.addEventListener('dragleave', ()  => el.dropZone.classList.remove('drag-over'));
 el.dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   el.dropZone.classList.remove('drag-over');
@@ -190,8 +207,8 @@ el.transcribeBtn.addEventListener('click', async () => {
 
   const formData = new FormData();
   formData.append('file', state.selectedFile);
-  formData.append('language', el.languageSelect.value);
-  formData.append('model', el.modelSelect.value);
+  formData.append('language', el.languageSelect.value || 'auto');
+  formData.append('model', el.modelSelect.value || 'whisper-large-v3-turbo');
 
   el.optionsPanel.hidden = true;
   el.progressPanel.hidden = false;
@@ -200,24 +217,35 @@ el.transcribeBtn.addEventListener('click', async () => {
 
   try {
     const res = await fetch('/api/transcriptions', { method: 'POST', body: formData });
+
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Upload failed');
+      let msg = `Server error ${res.status}`;
+      try {
+        const body = await res.json();
+        // FastAPI returns {"detail": "..."}, Express used {"error": "..."}
+        msg = body.detail || body.error || body.message || msg;
+      } catch (_) {}
+      throw new Error(msg);
     }
+
     const data = await res.json();
     state.currentTranscriptionId = data.id;
-    updateProgress(8, 'Waiting for Groq…');
+    updateProgress(10, 'Waiting for Groq…');
 
-    // Subscribe to this transcription's WS events
+    // Register transcription ID with WebSocket for live updates
     if (state.ws?.readyState === 1) {
       state.ws.send(JSON.stringify({ type: 'register', sessionId: data.id }));
-      // Re-register own session too so broadcast works
       state.ws.send(JSON.stringify({ type: 'register', sessionId: state.sessionId }));
     }
+
+    // Always start polling as fallback — it stops itself on completion/error
+    startPolling(data.id);
+
   } catch (err) {
+    stopPolling();
     el.progressPanel.hidden = true;
     el.optionsPanel.hidden = false;
-    showToast(err.message, 'error');
+    showToast(err.message, 'error', 8000);
   }
 });
 
@@ -241,60 +269,50 @@ async function loadTranscription(id) {
 
     el.metaFilename.textContent = data.original_name;
     el.metaDuration.textContent = data.duration ? `⏱ ${secondsToMMSS(data.duration)}` : '';
-    el.metaLanguage.textContent = data.language && data.language !== 'auto' ? `🌐 ${data.language.toUpperCase()}` : '';
+    el.metaLanguage.textContent = (data.language && data.language !== 'auto')
+      ? `🌐 ${data.language.toUpperCase()}` : '';
 
     el.segmentView.innerHTML = '';
-
     const segments = data.segments || [];
+
     if (segments.length > 0) {
       segments.forEach(seg => {
         const div = document.createElement('div');
         div.className = 'segment';
-        div.innerHTML = `
-          <span class="seg-time">${secondsToMMSS(seg.start)}</span>
-          <span class="seg-text">${escapeHtml(seg.text.trim())}</span>
-        `;
+        div.innerHTML = `<span class="seg-time">${secondsToMMSS(seg.start)}</span>
+                         <span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
         el.segmentView.appendChild(div);
       });
     } else if (data.transcript) {
       const div = document.createElement('div');
       div.className = 'segment';
-      div.innerHTML = `<span class="seg-time">00:00</span><span class="seg-text">${escapeHtml(data.transcript)}</span>`;
+      div.innerHTML = `<span class="seg-time">00:00</span>
+                       <span class="seg-text">${escapeHtml(data.transcript)}</span>`;
       el.segmentView.appendChild(div);
     }
 
-    // Store current id for exports
     state.currentTranscriptionId = id;
     showView('transcript');
-
-    // Reset upload state
     el.fileInput.value = '';
     setSelectedFile(null);
     el.progressPanel.hidden = true;
   } catch (err) {
-    showToast('Failed to load transcription', 'error');
+    showToast('Failed to load transcription: ' + err.message, 'error', 8000);
   }
 }
 
 function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 // ─── Export ───────────────────────────────────────────────────────────────────
-el.exportBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  el.exportMenu.classList.toggle('open');
-});
-
+el.exportBtn.addEventListener('click', (e) => { e.stopPropagation(); el.exportMenu.classList.toggle('open'); });
 document.addEventListener('click', () => el.exportMenu.classList.remove('open'));
 
 el.exportMenu.querySelectorAll('.dropdown-item').forEach(item => {
   item.addEventListener('click', () => {
-    const fmt = item.dataset.format;
     const id = state.currentTranscriptionId;
-    if (id) {
-      window.open(`/api/exports/${id}/${fmt}`, '_blank');
-    }
+    if (id) window.open(`/api/exports/${id}/${item.dataset.format}`, '_blank');
     el.exportMenu.classList.remove('open');
   });
 });
@@ -302,14 +320,11 @@ el.exportMenu.querySelectorAll('.dropdown-item').forEach(item => {
 el.copyBtn.addEventListener('click', async () => {
   const texts = [...el.segmentView.querySelectorAll('.seg-text')].map(e => e.textContent).join('\n');
   try {
-    // clipboard API requires HTTPS; fall back to execCommand on plain HTTP
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(texts);
     } else {
-      const ta = document.createElement('textarea');
-      ta.value = texts;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
+      const ta = Object.assign(document.createElement('textarea'),
+        { value: texts, style: 'position:fixed;opacity:0' });
       document.body.appendChild(ta);
       ta.focus(); ta.select();
       document.execCommand('copy');
@@ -317,7 +332,7 @@ el.copyBtn.addEventListener('click', async () => {
     }
     showToast('Copied to clipboard!', 'success');
   } catch (_) {
-    showToast('Copy failed — try selecting the text manually', 'error');
+    showToast('Copy failed — select the text manually', 'error');
   }
 });
 
@@ -331,7 +346,7 @@ async function refreshHistory() {
     const items = await res.json();
     state.history = items;
     renderHistory(items);
-  } catch { /* ignore */ }
+  } catch (_) {}
 }
 
 function renderHistory(items) {
@@ -361,7 +376,6 @@ function renderHistory(items) {
     `;
 
     if (item.status === 'completed') {
-      div.style.cursor = 'pointer';
       div.querySelector('.history-info').addEventListener('click', () => loadTranscription(item.id));
       div.querySelector('.history-icon').addEventListener('click', () => loadTranscription(item.id));
     }
@@ -378,36 +392,25 @@ function renderHistory(items) {
   });
 }
 
-// ─── Load Metadata (languages + models) ──────────────────────────────────────
+// ─── Metadata (models + languages) ───────────────────────────────────────────
 async function loadMeta() {
   try {
     const res = await fetch('/api/transcriptions/meta');
+    if (!res.ok) return;
     const { models, languages } = await res.json();
-
-    el.languageSelect.innerHTML = languages.map(l =>
-      `<option value="${l.code}">${l.label}</option>`
-    ).join('');
-
-    el.modelSelect.innerHTML = models.map(m =>
-      `<option value="${m.id}">${m.label}</option>`
-    ).join('');
-  } catch { /* use defaults */ }
+    el.languageSelect.innerHTML = languages.map(l => `<option value="${l.code}">${l.label}</option>`).join('');
+    el.modelSelect.innerHTML    = models.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
+  } catch (_) {}
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
-function showToast(message, type = 'info') {
+function showToast(message, type = 'info', duration = 5000) {
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
   toast.textContent = message;
   el.toastContainer.appendChild(toast);
-  setTimeout(() => toast.remove(), 4000);
+  setTimeout(() => toast.remove(), duration);
 }
-
-// ─── WS routing — map upload sessionId to transcription progress ─────────────
-// The backend broadcasts using the transcription ID; we need to listen on
-// the transcription ID. We re-register the WS with the transcription ID
-// once it's created (done in transcribeBtn handler above).
-// But we also need a fallback: poll if the WS message is missed.
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 connectWS();
