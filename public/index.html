@@ -34,34 +34,6 @@
         <span class="status-dot"></span>
         <span class="status-text">Connected</span>
       </div>
-
-      <!-- Groq API usage — shown after first transcription -->
-      <div class="usage-panel" id="usagePanel" hidden>
-        <div class="usage-title">Groq Usage</div>
-
-        <div class="usage-row" id="usageReqRow" hidden>
-          <div class="usage-labels">
-            <span>Daily Requests</span>
-            <span id="usageReqNums"></span>
-          </div>
-          <div class="usage-track">
-            <div class="usage-fill" id="usageReqFill"></div>
-          </div>
-        </div>
-
-        <div class="usage-row" id="usageAudioRow" hidden>
-          <div class="usage-labels">
-            <span>Audio / min</span>
-            <span id="usageAudioNums"></span>
-          </div>
-          <div class="usage-track">
-            <div class="usage-fill" id="usageAudioFill"></div>
-          </div>
-        </div>
-
-        <div class="usage-reset" id="usageReset"></div>
-      </div>
-
       <p class="powered-by">Powered by Groq Whisper</p>
     </div>
   </aside>
@@ -86,7 +58,7 @@
         </div>
         <h3>Drop your file here</h3>
         <p>or <button class="link-btn" id="browseBtn">browse to upload</button></p>
-        <p class="upload-hint">MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV &amp; more — up to 250 MB (audio compressed before sending to Groq)</p>
+        <p class="upload-hint">MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV &amp; more — up to 250 MB</p>
         <input type="file" id="fileInput" accept="audio/*,video/*" hidden />
       </div>
 
@@ -133,6 +105,58 @@
         </div>
         <p id="progressFilename" class="progress-filename"></p>
       </div>
+
+      <!-- Groq API Usage Card -->
+      <div class="usage-card" id="usageCard">
+        <div class="usage-card-header">
+          <div class="usage-card-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Groq API Usage
+          </div>
+          <a class="usage-card-link" href="https://console.groq.com/usage" target="_blank" rel="noopener">
+            console.groq.com
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          </a>
+        </div>
+
+        <!-- Placeholder — shown until first transcription -->
+        <div class="usage-empty" id="usageEmpty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="28" height="28"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <p>Usage data appears here after your first transcription.<br>For historical stats, visit <a href="https://console.groq.com/usage" target="_blank" rel="noopener">console.groq.com/usage</a>.</p>
+        </div>
+
+        <!-- Live data — shown after first transcription -->
+        <div class="usage-data" id="usageData" hidden>
+          <div class="usage-metrics">
+
+            <div class="usage-metric" id="ucReqMetric" hidden>
+              <div class="usage-metric-header">
+                <span class="usage-metric-label">Daily Requests</span>
+                <span class="usage-metric-nums" id="ucReqNums"></span>
+              </div>
+              <div class="usage-track">
+                <div class="usage-fill" id="ucReqFill"></div>
+              </div>
+            </div>
+
+            <div class="usage-metric" id="ucAudioMetric" hidden>
+              <div class="usage-metric-header">
+                <span class="usage-metric-label">Audio / min</span>
+                <span class="usage-metric-nums" id="ucAudioNums"></span>
+              </div>
+              <div class="usage-track">
+                <div class="usage-fill" id="ucAudioFill"></div>
+              </div>
+            </div>
+
+          </div>
+          <div class="usage-footer">
+            <span id="ucReset"></span>
+            <span class="usage-note">Live data from API headers · <a href="https://console.groq.com/usage" target="_blank" rel="noopener">Full history ↗</a></span>
+          </div>
+        </div>
+      </div>
+
     </section>
 
     <!-- Transcript View -->

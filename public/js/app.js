@@ -49,15 +49,16 @@ const el = {
   historyEmpty:      $('historyEmpty'),
   apiStatus:         $('apiStatus'),
   toastContainer:    $('toastContainer'),
-  // Usage bar
-  usagePanel:        $('usagePanel'),
-  usageReqRow:       $('usageReqRow'),
-  usageReqNums:      $('usageReqNums'),
-  usageReqFill:      $('usageReqFill'),
-  usageAudioRow:     $('usageAudioRow'),
-  usageAudioNums:    $('usageAudioNums'),
-  usageAudioFill:    $('usageAudioFill'),
-  usageReset:        $('usageReset'),
+  // Usage card (home page)
+  usageEmpty:        $('usageEmpty'),
+  usageData:         $('usageData'),
+  ucReqMetric:       $('ucReqMetric'),
+  ucReqNums:         $('ucReqNums'),
+  ucReqFill:         $('ucReqFill'),
+  ucAudioMetric:     $('ucAudioMetric'),
+  ucAudioNums:       $('ucAudioNums'),
+  ucAudioFill:       $('ucAudioFill'),
+  ucReset:           $('ucReset'),
 };
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
@@ -459,37 +460,40 @@ async function loadUsage() {
     const res = await fetch('/api/usage');
     if (!res.ok) return;
     const d = await res.json();
-    if (!d.last_updated) return;   // no transcription done yet
 
-    el.usagePanel.hidden = false;
+    if (!d.last_updated) return;   // no transcription done yet — keep placeholder
+
+    // Switch from placeholder to live data
+    el.usageEmpty.hidden = true;
+    el.usageData.hidden  = false;
 
     // ── Daily requests bar (RPD) ──────────────────────────────────────────────
     if (d.requests_limit != null && d.requests_remaining != null) {
       const used = d.requests_limit - d.requests_remaining;
       const pct  = Math.min(100, Math.round(used / d.requests_limit * 100));
-      el.usageReqNums.textContent = `${d.requests_remaining} / ${d.requests_limit} left today`;
-      el.usageReqFill.style.width = pct + '%';
-      el.usageReqFill.className = 'usage-fill ' + _usageFillClass(pct);
-      el.usageReqRow.hidden = false;
+      el.ucReqNums.textContent = `${d.requests_remaining.toLocaleString()} / ${d.requests_limit.toLocaleString()} left`;
+      el.ucReqFill.style.width = pct + '%';
+      el.ucReqFill.className   = 'usage-fill ' + _usageFillClass(pct);
+      el.ucReqMetric.hidden    = false;
     }
 
     // ── Per-minute audio seconds bar (TPM) ────────────────────────────────────
     if (d.tokens_limit != null && d.tokens_remaining != null) {
       const used = d.tokens_limit - d.tokens_remaining;
       const pct  = Math.min(100, Math.round(used / d.tokens_limit * 100));
-      const fmtSec = (s) => s >= 60 ? `${Math.round(s/60)}m` : `${s}s`;
-      el.usageAudioNums.textContent = `${fmtSec(d.tokens_remaining)} / ${fmtSec(d.tokens_limit)} this min`;
-      el.usageAudioFill.style.width = pct + '%';
-      el.usageAudioFill.className = 'usage-fill ' + _usageFillClass(pct);
-      el.usageAudioRow.hidden = false;
+      const fmt  = (s) => s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`;
+      el.ucAudioNums.textContent = `${fmt(d.tokens_remaining)} / ${fmt(d.tokens_limit)} left`;
+      el.ucAudioFill.style.width = pct + '%';
+      el.ucAudioFill.className   = 'usage-fill ' + _usageFillClass(pct);
+      el.ucAudioMetric.hidden    = false;
     }
 
-    // ── Reset labels ──────────────────────────────────────────────────────────
+    // ── Reset label ───────────────────────────────────────────────────────────
     const resets = [
       _resetLabel(d.requests_reset, 'Daily quota'),
       _resetLabel(d.tokens_reset,   'Audio quota'),
     ].filter(Boolean);
-    el.usageReset.textContent = resets[0] || '';
+    el.ucReset.textContent = resets[0] || '';
 
   } catch (_) {}
 }
