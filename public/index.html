@@ -34,7 +34,7 @@
         <span class="status-dot"></span>
         <span class="status-text">Connected</span>
       </div>
-      <p class="powered-by">Powered by Groq Whisper</p>
+      <p class="powered-by">Powered by Groq &amp; OpenVINO</p>
     </div>
   </aside>
 
@@ -45,9 +45,27 @@
     <section id="uploadView" class="view active">
       <div class="view-header">
         <h2>New Transcription</h2>
-        <p>Upload audio or video and get accurate text in seconds — no GPU needed</p>
+        <p>Select your engine, then drop or browse your audio / video file</p>
       </div>
 
+      <!-- Step 1: Engine selection — always visible -->
+      <div class="engine-bar">
+        <span class="engine-bar-label">Engine</span>
+        <div class="source-options" id="sourceOptions">
+          <label class="source-btn active" data-value="groq">
+            <input type="radio" name="source" value="groq" checked hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 15a4 4 0 0 0 4 4h9a5 5 0 1 0-.1-9.999 5.002 5.002 0 0 0-9.78 2.096A4.001 4.001 0 0 0 3 15z"/></svg>
+            Groq Cloud
+          </label>
+          <label class="source-btn" id="ovSourceBtn" data-value="openvino">
+            <input type="radio" name="source" value="openvino" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Intel GPU
+          </label>
+        </div>
+      </div>
+
+      <!-- Step 2: Upload area -->
       <div class="upload-area" id="dropZone">
         <div class="upload-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -58,11 +76,11 @@
         </div>
         <h3>Drop your file here</h3>
         <p>or <button class="link-btn" id="browseBtn">browse to upload</button></p>
-        <p class="upload-hint">MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV &amp; more — up to 250 MB</p>
+        <p class="upload-hint" id="uploadHint">MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV &amp; more — Groq max ~104 min of audio</p>
         <input type="file" id="fileInput" accept="audio/*,video/*" hidden />
       </div>
 
-      <!-- Options -->
+      <!-- Step 3: Options — shown after file selection -->
       <div class="options-panel" id="optionsPanel" hidden>
         <div class="selected-file" id="selectedFile">
           <span class="file-icon">🎵</span>
@@ -86,44 +104,11 @@
               <option value="whisper-large-v3-turbo">Whisper Large v3 Turbo (fast)</option>
             </select>
           </div>
-          <div class="option-group" id="localModelGroup" hidden>
-            <label for="localModelSelect">Local Model</label>
-            <select id="localModelSelect">
-              <option value="small">Small — 466 MB · balanced ✓</option>
-            </select>
-          </div>
           <div class="option-group" id="ovModelGroup" hidden>
             <label for="ovModelSelect">OpenVINO Model</label>
             <select id="ovModelSelect">
-              <option value="small">Small — ~230 MB · balanced ✓</option>
+              <option value="small">Small — ~240 MB · balanced ✓</option>
             </select>
-          </div>
-        </div>
-
-        <!-- Transcription engine row -->
-        <div class="source-row">
-          <div class="source-label">Engine</div>
-          <div class="source-options" id="sourceOptions">
-            <label class="source-btn active" data-value="groq">
-              <input type="radio" name="source" value="groq" checked hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 15a4 4 0 0 0 4 4h9a5 5 0 1 0-.1-9.999 5.002 5.002 0 0 0-9.78 2.096A4.001 4.001 0 0 0 3 15z"/></svg>
-              Groq Cloud
-            </label>
-            <label class="source-btn" data-value="auto">
-              <input type="radio" name="source" value="auto" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
-              Auto (Groq → Local)
-            </label>
-            <label class="source-btn" data-value="local">
-              <input type="radio" name="source" value="local" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-              Local CPU
-            </label>
-            <label class="source-btn" id="ovSourceBtn" data-value="openvino">
-              <input type="radio" name="source" value="openvino" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-              Intel GPU
-            </label>
           </div>
         </div>
 
@@ -142,7 +127,10 @@
         <div class="progress-bar-wrap">
           <div class="progress-bar" id="progressBar" style="width:0%"></div>
         </div>
-        <p id="progressFilename" class="progress-filename"></p>
+        <div class="progress-footer">
+          <p id="progressFilename" class="progress-filename"></p>
+          <p id="progressEta" class="progress-eta"></p>
+        </div>
       </div>
 
       <!-- Groq API Usage Card -->
@@ -158,13 +146,11 @@
           </a>
         </div>
 
-        <!-- Placeholder — shown until first transcription -->
         <div class="usage-empty" id="usageEmpty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="28" height="28"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-          <p>Usage data appears here after your first transcription.<br>For historical stats, visit <a href="https://console.groq.com/usage" target="_blank" rel="noopener">console.groq.com/usage</a>.</p>
+          <p>Usage data appears here after your first Groq transcription.<br>For historical stats, visit <a href="https://console.groq.com/usage" target="_blank" rel="noopener">console.groq.com/usage</a>.</p>
         </div>
 
-        <!-- Live data — shown after first transcription -->
         <div class="usage-data" id="usageData" hidden>
           <div class="usage-metrics">
 

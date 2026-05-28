@@ -69,10 +69,7 @@ def get_last_usage() -> dict:
 def preprocess_audio(file_path: str) -> tuple[str, bool]:
     """
     Convert any audio/video to 16 kHz mono MP3 at 32 kbps using ffmpeg.
-
-    This strips the video track and dramatically reduces file size:
-    - 1 hour of audio  →  ~14 MB  (well under the 25 MB Groq limit)
-    - 2 hours of audio →  ~28 MB  (just over — Groq will reject it)
+    Applies background noise reduction (afftdn) and speech enhancement (highpass + loudnorm).
 
     Returns (processed_path, is_temp).
     Caller must os.unlink(processed_path) when is_temp=True.
@@ -83,9 +80,10 @@ def preprocess_audio(file_path: str) -> tuple[str, bool]:
         result = subprocess.run(
             [
                 "ffmpeg", "-i", file_path,
-                "-vn",                    # strip video
-                "-ar", "16000",           # 16 kHz — optimal for Whisper
-                "-ac", "1",               # mono
+                "-vn",                              # strip video
+                "-af", "highpass=f=80,afftdn=nf=-25,loudnorm",  # noise reduction + speech enhance
+                "-ar", "16000",                     # 16 kHz — optimal for Whisper
+                "-ac", "1",                         # mono
                 "-b:a", PREPROCESS_BITRATE,
                 "-y", tmp,
             ],

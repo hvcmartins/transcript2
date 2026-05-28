@@ -16,6 +16,7 @@ const state = {
   sessionId: generateUUID(),
   history: [],
   pollTimer: null,
+  transcriptionStartTime: null,
 };
 
 // ─── DOM Refs ────────────────────────────────────────────────────────────────
@@ -33,17 +34,17 @@ const el = {
   languageSelect:    $('languageSelect'),
   modelSelect:       $('modelSelect'),
   groqModelGroup:    $('groqModelGroup'),
-  localModelGroup:   $('localModelGroup'),
-  localModelSelect:  $('localModelSelect'),
   ovModelGroup:      $('ovModelGroup'),
   ovModelSelect:     $('ovModelSelect'),
   ovSourceBtn:       $('ovSourceBtn'),
   sourceOptions:     $('sourceOptions'),
+  uploadHint:        $('uploadHint'),
   transcribeBtn:     $('transcribeBtn'),
   progressPanel:     $('progressPanel'),
   progressLabel:     $('progressLabel'),
   progressBar:       $('progressBar'),
   progressFilename:  $('progressFilename'),
+  progressEta:       $('progressEta'),
   backBtn:           $('backBtn'),
   metaFilename:      $('metaFilename'),
   metaDuration:      $('metaDuration'),
@@ -56,7 +57,6 @@ const el = {
   historyEmpty:      $('historyEmpty'),
   apiStatus:         $('apiStatus'),
   toastContainer:    $('toastContainer'),
-  // Usage card (home page)
   usageEmpty:        $('usageEmpty'),
   usageData:         $('usageData'),
   ucReqMetric:       $('ucReqMetric'),
@@ -67,6 +67,9 @@ const el = {
   ucAudioFill:       $('ucAudioFill'),
   ucReset:           $('ucReset'),
 };
+
+// Groq max audio duration at 32 kbps → 25 MB ≈ 104 minutes
+const GROQ_MAX_DURATION_S = 6250;
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 function connectWS() {
@@ -107,7 +110,9 @@ function handleWsMessage(msg) {
     stopPolling();
     updateProgress(100, 'Done!');
     setTimeout(() => {
+      state.transcriptionStartTime = null;
       el.progressPanel.hidden = true;
+      el.progressEta.textContent = '';
       showToast('Transcription complete!', 'success');
       loadTranscription(msg.id);
     }, 600);
@@ -115,14 +120,16 @@ function handleWsMessage(msg) {
     loadUsage();
   } else if (msg.type === 'error') {
     stopPolling();
+    state.transcriptionStartTime = null;
     el.progressPanel.hidden = true;
+    el.progressEta.textContent = '';
     el.optionsPanel.hidden = false;
     showToast(`Error: ${msg.error}`, 'error', 8000);
     refreshHistory();
   }
 }
 
-// ─── Polling fallback (in case WebSocket misses an event) ────────────────────
+// ─── Polling fallback ─────────────────────────────────────────────────────────
 function startPolling(id) {
   stopPolling();
   state.pollTimer = setInterval(async () => {
@@ -137,7 +144,9 @@ function startPolling(id) {
         stopPolling();
         updateProgress(100, 'Done!');
         setTimeout(() => {
+          state.transcriptionStartTime = null;
           el.progressPanel.hidden = true;
+          el.progressEta.textContent = '';
           showToast('Transcription complete!', 'success');
           loadTranscription(id);
         }, 600);
@@ -145,12 +154,14 @@ function startPolling(id) {
         loadUsage();
       } else if (data.status === 'failed') {
         stopPolling();
+        state.transcriptionStartTime = null;
         el.progressPanel.hidden = true;
+        el.progressEta.textContent = '';
         el.optionsPanel.hidden = false;
         showToast(`Error: ${data.error_msg || 'Transcription failed'}`, 'error', 8000);
         refreshHistory();
       }
-    } catch (_) { /* network hiccup — try again next tick */ }
+    } catch (_) {}
   }, 2000);
 }
 
@@ -220,22 +231,50 @@ el.dropZone.addEventListener('drop', (e) => {
   if (file) setSelectedFile(file);
 });
 
+// ─── Audio duration detection ─────────────────────────────────────────────────
+function getFileDuration(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const media = document.createElement('video');
+    media.preload = 'metadata';
+    media.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(media.duration); };
+    media.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    media.src = url;
+  });
+}
+
 // ─── Upload & Transcribe ──────────────────────────────────────────────────────
 el.transcribeBtn.addEventListener('click', async () => {
   if (!state.selectedFile) return;
 
   const src = getSource();
+
+  // Groq: validate audio duration before upload
+  if (src === 'groq') {
+    const duration = await getFileDuration(state.selectedFile);
+    if (duration && duration > GROQ_MAX_DURATION_S) {
+      const mins = Math.round(duration / 60);
+      showToast(
+        `Audio is ${mins} min — Groq supports up to ~104 min after compression. ` +
+        `Try splitting the file or use Intel GPU for long audio.`,
+        'error', 10000
+      );
+      return;
+    }
+  }
+
   const formData = new FormData();
-  formData.append('file',        state.selectedFile);
-  formData.append('language',    el.languageSelect.value   || 'auto');
-  formData.append('model',       el.modelSelect.value      || 'whisper-large-v3-turbo');
-  formData.append('source',      src);
-  formData.append('local_model', el.localModelSelect.value || 'small');
-  formData.append('ov_model',    el.ovModelSelect.value    || 'small');
+  formData.append('file',     state.selectedFile);
+  formData.append('language', el.languageSelect.value   || 'auto');
+  formData.append('model',    el.modelSelect.value      || 'whisper-large-v3-turbo');
+  formData.append('source',   src);
+  formData.append('ov_model', el.ovModelSelect.value    || 'small');
 
   el.optionsPanel.hidden = true;
   el.progressPanel.hidden = false;
   el.progressFilename.textContent = state.selectedFile.name;
+  el.progressEta.textContent = '';
+  state.transcriptionStartTime = Date.now();
   updateProgress(2, 'Uploading…');
 
   try {
@@ -245,7 +284,6 @@ el.transcribeBtn.addEventListener('click', async () => {
       let msg = `Server error ${res.status}`;
       try {
         const body = await res.json();
-        // FastAPI returns {"detail": "..."}, Express used {"error": "..."}
         msg = body.detail || body.error || body.message || msg;
       } catch (_) {}
       throw new Error(msg);
@@ -253,28 +291,49 @@ el.transcribeBtn.addEventListener('click', async () => {
 
     const data = await res.json();
     state.currentTranscriptionId = data.id;
-    updateProgress(10, 'Waiting for Groq…');
+    updateProgress(10, 'Waiting for engine…');
 
-    // Register transcription ID with WebSocket for live updates
     if (state.ws?.readyState === 1) {
       state.ws.send(JSON.stringify({ type: 'register', sessionId: data.id }));
       state.ws.send(JSON.stringify({ type: 'register', sessionId: state.sessionId }));
     }
 
-    // Always start polling as fallback — it stops itself on completion/error
     startPolling(data.id);
 
   } catch (err) {
     stopPolling();
+    state.transcriptionStartTime = null;
     el.progressPanel.hidden = true;
+    el.progressEta.textContent = '';
     el.optionsPanel.hidden = false;
     showToast(err.message, 'error', 8000);
   }
 });
 
+// ─── Progress + ETA ───────────────────────────────────────────────────────────
 function updateProgress(pct, label) {
   el.progressBar.style.width = pct + '%';
   if (label) el.progressLabel.textContent = label;
+
+  // ETA: only show during active processing (not upload or done)
+  if (state.transcriptionStartTime && pct > 20 && pct < 95) {
+    const elapsed = (Date.now() - state.transcriptionStartTime) / 1000;
+    if (elapsed > 4) {
+      const rate = pct / elapsed;          // % per second
+      const remaining = Math.ceil((100 - pct) / rate);
+      if (remaining > 3) {
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        el.progressEta.textContent = m > 0
+          ? `~${m}m ${s}s remaining`
+          : `~${s}s remaining`;
+      } else {
+        el.progressEta.textContent = '';
+      }
+    }
+  } else if (pct >= 95 || pct <= 10) {
+    el.progressEta.textContent = '';
+  }
 }
 
 // ─── Transcript Display ───────────────────────────────────────────────────────
@@ -308,7 +367,6 @@ async function loadTranscription(id) {
         const timeHtml = `<span class="seg-time">${secondsToMMSS(seg.start)}</span>`;
 
         if (hasSpeakers && seg.speaker) {
-          // Only show badge when speaker changes
           const spkClass = 'spk-' + (seg.speaker.slice(-1).toLowerCase());
           const badgeHtml = (seg.speaker !== lastSpeaker)
             ? `<span class="seg-speaker ${spkClass}">${escapeHtml(seg.speaker)}</span>`
@@ -431,11 +489,6 @@ function renderHistory(items) {
 }
 
 // ─── Groq API Usage Bar ───────────────────────────────────────────────────────
-// Groq rate-limit header semantics (confirmed from docs):
-//   x-ratelimit-limit-requests   / remaining / reset  → DAILY quota (RPD)
-//   x-ratelimit-limit-tokens     / remaining / reset  → PER-MINUTE quota (TPM, in audio seconds)
-// There is no programmatic usage API on the free plan — headers are the only source.
-
 function _usageFillClass(pct) {
   if (pct >= 90) return 'crit';
   if (pct >= 70) return 'warn';
@@ -444,10 +497,8 @@ function _usageFillClass(pct) {
 
 function _resetLabel(resetStr, label) {
   if (!resetStr) return '';
-  // Groq returns ISO timestamps or relative seconds strings
   const asNum = Number(resetStr);
   if (!isNaN(asNum)) {
-    // Relative seconds
     const diff = Math.max(0, Math.round(asNum));
     if (diff <= 0) return `${label} resets now`;
     const m = Math.floor(diff / 60), s = diff % 60;
@@ -472,13 +523,11 @@ async function loadUsage() {
     if (!res.ok) return;
     const d = await res.json();
 
-    if (!d.last_updated) return;   // no transcription done yet — keep placeholder
+    if (!d.last_updated) return;
 
-    // Switch from placeholder to live data
     el.usageEmpty.hidden = true;
     el.usageData.hidden  = false;
 
-    // ── Daily requests bar (RPD) ──────────────────────────────────────────────
     if (d.requests_limit != null && d.requests_remaining != null) {
       const used = d.requests_limit - d.requests_remaining;
       const pct  = Math.min(100, Math.round(used / d.requests_limit * 100));
@@ -488,7 +537,6 @@ async function loadUsage() {
       el.ucReqMetric.hidden    = false;
     }
 
-    // ── Per-minute audio seconds bar (TPM) ────────────────────────────────────
     if (d.tokens_limit != null && d.tokens_remaining != null) {
       const used = d.tokens_limit - d.tokens_remaining;
       const pct  = Math.min(100, Math.round(used / d.tokens_limit * 100));
@@ -499,7 +547,6 @@ async function loadUsage() {
       el.ucAudioMetric.hidden    = false;
     }
 
-    // ── Reset label ───────────────────────────────────────────────────────────
     const resets = [
       _resetLabel(d.requests_reset, 'Daily quota'),
       _resetLabel(d.tokens_reset,   'Audio quota'),
@@ -509,9 +556,16 @@ async function loadUsage() {
   } catch (_) {}
 }
 
-// ─── Source (engine) selector ─────────────────────────────────────────────────
+// ─── Engine (source) selector ─────────────────────────────────────────────────
 function getSource() {
   return el.sourceOptions.querySelector('.source-btn.active')?.dataset.value || 'groq';
+}
+
+function updateUploadHint(src) {
+  if (!el.uploadHint) return;
+  el.uploadHint.textContent = src === 'openvino'
+    ? 'MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV & more — no size limit'
+    : 'MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV & more — Groq max ~104 min of audio';
 }
 
 function initSourceSelector() {
@@ -521,9 +575,9 @@ function initSourceSelector() {
       btn.classList.add('active');
       btn.querySelector('input').checked = true;
       const src = btn.dataset.value;
-      el.groqModelGroup.hidden  = (src === 'local' || src === 'openvino');
-      el.localModelGroup.hidden = (src === 'groq'  || src === 'openvino');
-      el.ovModelGroup.hidden    = (src !== 'openvino');
+      el.groqModelGroup.hidden = (src === 'openvino');
+      el.ovModelGroup.hidden   = (src !== 'openvino');
+      updateUploadHint(src);
     });
   });
 }
@@ -533,18 +587,11 @@ async function loadMeta() {
   try {
     const res = await fetch('/api/transcriptions/meta');
     if (!res.ok) return;
-    const { models, languages, local_models, ov_models, ov_available } = await res.json();
+    const { models, languages, ov_models, ov_available } = await res.json();
     el.languageSelect.innerHTML = languages.map(l =>
       `<option value="${l.code}">${l.label}</option>`).join('');
     el.modelSelect.innerHTML = models.map(m =>
       `<option value="${m.id}">${m.label}</option>`).join('');
-    if (local_models?.length) {
-      el.localModelSelect.innerHTML = local_models.map(m => {
-        const cached = m.cached ? ' ✓ cached' : '';
-        return `<option value="${m.id}">${m.label}${cached}</option>`;
-      }).join('');
-      el.localModelSelect.value = 'small';
-    }
     if (ov_models?.length) {
       el.ovModelSelect.innerHTML = ov_models.map(m => {
         const cached = m.cached ? ' ✓ cached' : '';
@@ -552,11 +599,10 @@ async function loadMeta() {
       }).join('');
       el.ovModelSelect.value = 'small';
     }
-    // Grey out OpenVINO button if the package isn't installed in this image
     if (el.ovSourceBtn) {
       el.ovSourceBtn.title = ov_available
         ? 'Intel GPU via OpenVINO'
-        : 'OpenVINO not installed — rebuild with --build-arg WITH_OPENVINO=true';
+        : 'OpenVINO not installed — build with Dockerfile.openvino';
       el.ovSourceBtn.style.opacity = ov_available ? '' : '0.45';
       el.ovSourceBtn.style.cursor  = ov_available ? '' : 'not-allowed';
       if (!ov_available) {

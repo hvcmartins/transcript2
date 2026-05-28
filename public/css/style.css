@@ -272,15 +272,15 @@ body { display: flex; min-height: 100vh; }
 
 .option-group select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
 
-/* ─── Engine Source Row ──────────────────────────────────────────────── */
-.source-row {
+/* ─── Engine Bar (above upload area) ────────────────────────────────── */
+.engine-bar {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
 }
 
-.source-label {
+.engine-bar-label {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -434,7 +434,20 @@ body { display: flex; min-height: 100vh; }
   transition: width .45s ease;
 }
 
+.progress-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .progress-filename { font-size: 12px; color: var(--text3); }
+
+.progress-eta {
+  font-size: 12px;
+  color: var(--accent2);
+  font-variant-numeric: tabular-nums;
+  min-height: 1em;
+}
 
 /* ─── Transcript View ────────────────────────────────────────────────── */
 #transcriptView { padding: 0; max-width: none; }
