@@ -247,8 +247,20 @@ async def _run_transcription(
 
         if source == "groq":
             await _send(30, extra={"label": "Transcribing with Groq…"})
+            loop = asyncio.get_event_loop()
+
+            def _groq_cb(chunk_num: int, total: int):
+                label = (
+                    f"Transcribing with Groq… (chunk {chunk_num}/{total})"
+                    if total > 1 else "Transcribing with Groq…"
+                )
+                pct = 30 + int((chunk_num - 1) / total * 50)
+                asyncio.run_coroutine_threadsafe(
+                    _send(pct, extra={"label": label}), loop
+                )
+
             result = await asyncio.to_thread(
-                transcribe_file, file_path, language, model
+                transcribe_file, file_path, language, model, _groq_cb
             )
 
         elif source == "openvino":

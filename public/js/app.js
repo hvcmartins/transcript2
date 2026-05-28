@@ -78,7 +78,7 @@ const el = {
   ucReset:              $('ucReset'),
 };
 
-const GROQ_MAX_DURATION_S = 6250; // ~104 min at 32 kbps = 25 MB
+
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 function connectWS() {
@@ -325,16 +325,6 @@ el.transcribeBtn.addEventListener('click', async () => {
   if (!state.preprocessId) return;
 
   const src = getSource();
-
-  // Groq: validate duration
-  if (src === 'groq' && state.audioDuration && state.audioDuration > GROQ_MAX_DURATION_S) {
-    const mins = Math.round(state.audioDuration / 60);
-    showToast(
-      `Audio is ${mins} min — Groq supports up to ~104 min. Use Intel GPU for long audio.`,
-      'error', 10000
-    );
-    return;
-  }
 
   const formData = new FormData();
   formData.append('preprocess_id', state.preprocessId);
@@ -679,7 +669,7 @@ function updateUploadHint(src) {
   if (!el.uploadHint) return;
   el.uploadHint.textContent = src === 'openvino'
     ? 'MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV & more — no size limit'
-    : 'MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV & more — Groq max ~104 min of audio';
+    : 'MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV & more — long files split automatically';
 }
 
 function initSourceSelector() {
