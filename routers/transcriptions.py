@@ -4,6 +4,7 @@ import os
 import shutil
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 
@@ -14,7 +15,10 @@ from services.database import (
     get_transcription,
     update_transcription,
 )
-from services.groq_service import SUPPORTED_LANGUAGES, SUPPORTED_MODELS, transcribe_file, preprocess_audio
+from services.groq_service import (
+    SUPPORTED_LANGUAGES, SUPPORTED_MODELS,
+    transcribe_file, preprocess_audio, get_audio_duration,
+)
 from services.whisper_openvino import (
     OPENVINO_AVAILABLE, SUPPORTED_OV_MODELS, transcribe_openvino, is_ov_model_cached,
 )
@@ -24,8 +28,7 @@ router = APIRouter()
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# 2 GB hard cap — disk space is the real limit
-UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024
+UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024  # 2 GB
 
 ALLOWED_EXTENSIONS = {
     ".mp3", ".mp4", ".m4a", ".wav", ".webm", ".ogg", ".flac",
@@ -68,48 +71,146 @@ async def get_one(id: str):
     return item
 
 
-# ── Upload + transcribe ───────────────────────────────────────────────────────
-@router.post("", status_code=202)
-async def create(
+# ── Phase 1: Upload + preprocess (returns preprocess_id immediately) ──────────
+@router.post("/preprocess", status_code=202)
+async def upload_and_preprocess(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    language: str  = Form("auto"),
-    model: str     = Form("whisper-large-v3-turbo"),
-    source: str    = Form("groq"),   # "groq" | "openvino"
-    ov_model: str  = Form("small"),
 ):
     suffix = Path(file.filename or "").suffix.lower() or ".audio"
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix}")
 
-    filename = f"{uuid.uuid4().hex}{suffix}"
-    file_path = UPLOAD_DIR / filename
+    preprocess_id = uuid.uuid4().hex
+    raw_filename  = f"{preprocess_id}{suffix}"
+    raw_path      = UPLOAD_DIR / raw_filename
     size = 0
 
-    with open(file_path, "wb") as out:
+    with open(raw_path, "wb") as out:
         while chunk := await file.read(1024 * 1024):
             size += len(chunk)
             if size > UPLOAD_LIMIT:
                 out.close()
-                file_path.unlink(missing_ok=True)
+                raw_path.unlink(missing_ok=True)
                 raise HTTPException(status_code=413, detail="File too large (max 2 GB)")
             out.write(chunk)
+
+    manager = request.app.state.manager
+    background_tasks.add_task(
+        _run_preprocess, preprocess_id, str(raw_path),
+        file.filename or raw_filename, size, manager,
+    )
+
+    return {"preprocess_id": preprocess_id}
+
+
+async def _run_preprocess(
+    preprocess_id: str,
+    raw_path: str,
+    original_name: str,
+    original_size: int,
+    manager,
+) -> None:
+    """
+    Background: preprocess the uploaded file → compressed MP3.
+    Saves {preprocess_id}.mp3 + {preprocess_id}.json sidecar in UPLOAD_DIR.
+    Broadcasts progress/done/error to WebSocket channel `preprocess_id`.
+    """
+    async def _send(phase_pct: int, label: str = "Preprocessing audio…"):
+        await manager.broadcast(preprocess_id, {
+            "type":         "preprocess_progress",
+            "preprocess_id": preprocess_id,
+            "phase_pct":    phase_pct,
+            "label":        label,
+        })
+
+    loop = asyncio.get_event_loop()
+
+    def _cb(pct: int):
+        asyncio.run_coroutine_threadsafe(_send(pct), loop)
+
+    await _send(0)
+    try:
+        processed_path, is_temp = await asyncio.to_thread(preprocess_audio, raw_path, _cb)
+
+        # Move compressed file to permanent location; delete raw upload
+        perm_path = str(UPLOAD_DIR / f"{preprocess_id}.mp3")
+        if is_temp and processed_path:
+            shutil.move(processed_path, perm_path)
+            if os.path.realpath(raw_path) != os.path.realpath(perm_path):
+                Path(raw_path).unlink(missing_ok=True)
+        else:
+            if os.path.realpath(raw_path) != os.path.realpath(perm_path):
+                shutil.move(raw_path, perm_path)
+
+        duration_s = await asyncio.to_thread(get_audio_duration, perm_path)
+
+        sidecar = UPLOAD_DIR / f"{preprocess_id}.json"
+        sidecar.write_text(json.dumps({
+            "original_name": original_name,
+            "original_size": original_size,
+            "duration_s":    duration_s,
+        }))
+
+        await manager.broadcast(preprocess_id, {
+            "type":          "preprocess_done",
+            "preprocess_id": preprocess_id,
+            "duration_s":    duration_s,
+            "original_name": original_name,
+        })
+
+    except Exception as exc:
+        import traceback
+        print(f"Preprocess error [{preprocess_id}]: {exc}\n{traceback.format_exc()}")
+        Path(raw_path).unlink(missing_ok=True)
+        Path(UPLOAD_DIR / f"{preprocess_id}.mp3").unlink(missing_ok=True)
+        await manager.broadcast(preprocess_id, {
+            "type":          "preprocess_error",
+            "preprocess_id": preprocess_id,
+            "error":         str(exc),
+        })
+
+
+# ── Phase 2: Start transcription (uses preprocess_id, no re-upload) ───────────
+@router.post("", status_code=202)
+async def create(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    preprocess_id: str    = Form(...),
+    language: str         = Form("auto"),
+    model: str            = Form("whisper-large-v3-turbo"),
+    source: str           = Form("groq"),   # "groq" | "openvino"
+    ov_model: str         = Form("small"),
+):
+    sidecar    = UPLOAD_DIR / f"{preprocess_id}.json"
+    audio_path = UPLOAD_DIR / f"{preprocess_id}.mp3"
+
+    if not sidecar.exists() or not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Preprocessed file not found or expired")
+
+    meta = json.loads(sidecar.read_text())
+    sidecar.unlink(missing_ok=True)
+
+    # Rename to a transcription-scoped filename
+    tx_filename = uuid.uuid4().hex + ".mp3"
+    tx_path     = UPLOAD_DIR / tx_filename
+    shutil.move(str(audio_path), str(tx_path))
 
     record_id = str(uuid.uuid4())
     record = create_transcription({
         "id":            record_id,
-        "filename":      filename,
-        "original_name": file.filename,
-        "file_size":     size,
+        "filename":      tx_filename,
+        "original_name": meta["original_name"],
+        "file_size":     meta["original_size"],
         "language":      language,
         "model":         model,
     })
 
     manager = request.app.state.manager
     background_tasks.add_task(
-        _run_transcription, record_id, str(file_path),
-        language, model, manager, source, ov_model
+        _run_transcription, record_id, str(tx_path),
+        language, model, manager, source, ov_model,
     )
 
     return record
@@ -127,7 +228,7 @@ async def delete(id: str):
     return {"success": True}
 
 
-# ── Background worker ─────────────────────────────────────────────────────────
+# ── Background transcription worker ──────────────────────────────────────────
 async def _run_transcription(
     id: str, file_path: str, language: str, model: str, manager,
     source: str = "groq", ov_model: str = "small",
@@ -141,46 +242,14 @@ async def _run_transcription(
 
     await _send(5)
 
-    processed_path: str | None = None
-    is_temp = False
-
     try:
-        # ── Step 1: preprocess (noise reduction + speech enhance → 16 kHz mono MP3) ──
-        await _send(10, extra={"label": "Preprocessing audio…", "phase": "preprocess", "phase_pct": 0})
-        loop = asyncio.get_event_loop()
-
-        def _preprocess_cb(pct: int):
-            overall = 10 + int(pct * 20 / 100)   # map 0-100% → 10-30% overall
-            asyncio.run_coroutine_threadsafe(
-                _send(overall, extra={
-                    "label": "Preprocessing audio…",
-                    "phase": "preprocess",
-                    "phase_pct": pct,
-                }),
-                loop,
-            )
-
-        processed_path, is_temp = await asyncio.to_thread(preprocess_audio, file_path, _preprocess_cb)
-
-        # Replace the original upload with the compressed version to save space
-        if is_temp and processed_path:
-            perm_name = Path(file_path).stem + ".mp3"
-            perm_dest = str(UPLOAD_DIR / perm_name)
-            shutil.move(processed_path, perm_dest)
-            if os.path.realpath(file_path) != os.path.realpath(perm_dest):
-                Path(file_path).unlink(missing_ok=True)
-            file_path = perm_dest
-            processed_path = perm_dest
-            is_temp = False
-            update_transcription(id, {"filename": perm_name})
-
-        # ── Step 2: transcribe ────────────────────────────────────────────────
+        # ── Transcribe (file already preprocessed) ────────────────────────────
         result: dict | None = None
 
         if source == "groq":
             await _send(30, extra={"label": "Transcribing with Groq…"})
             result = await asyncio.to_thread(
-                transcribe_file, processed_path, language, model
+                transcribe_file, file_path, language, model
             )
 
         elif source == "openvino":
@@ -198,13 +267,13 @@ async def _run_transcription(
                 )
 
             result = await asyncio.to_thread(
-                transcribe_openvino, processed_path, language, ov_model, _ov_progress
+                transcribe_openvino, file_path, language, ov_model, _ov_progress
             )
 
         else:
             raise ValueError(f"Unknown source: {source!r}")
 
-        # ── Step 3: speaker diarization ───────────────────────────────────────
+        # ── Speaker diarization ───────────────────────────────────────────────
         await _send(80, extra={"label": "Analysing speakers…"})
 
         segments = result["segments"]
@@ -215,7 +284,7 @@ async def _run_transcription(
         except Exception as diar_exc:
             print(f"Diarization skipped [{id}]: {diar_exc}")
 
-        # ── Step 4: persist ───────────────────────────────────────────────────
+        # ── Persist ───────────────────────────────────────────────────────────
         await _send(90, extra={"label": "Saving…"})
 
         update_transcription(id, {
@@ -249,6 +318,3 @@ async def _run_transcription(
             "status": "failed",
             "error":  str(exc),
         })
-    finally:
-        if is_temp and processed_path and os.path.exists(processed_path):
-            os.unlink(processed_path)

@@ -9,75 +9,76 @@ function generateUUID() {
 
 // ─── State ───────────────────────────────────────────────────────────────────
 const state = {
-  currentView: 'upload',
-  selectedFile: null,
+  currentView:            'upload',
+  selectedFile:           null,
+  preprocessId:           null,      // set after upload_and_preprocess
+  audioDuration:          null,      // seconds; set when preprocess_done
   currentTranscriptionId: null,
-  ws: null,
-  sessionId: generateUUID(),
-  history: [],
-  pollTimer: null,
+  ws:                     null,
+  sessionId:              generateUUID(),
+  history:                [],
+  pollTimer:              null,
   transcriptionStartTime: null,
 };
 
 // ─── DOM Refs ────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 const el = {
-  navBtns:           document.querySelectorAll('.nav-btn'),
-  views:             { upload: $('uploadView'), history: $('historyView'), transcript: $('transcriptView') },
-  dropZone:          $('dropZone'),
-  fileInput:         $('fileInput'),
-  browseBtn:         $('browseBtn'),
-  optionsPanel:      $('optionsPanel'),
-  selectedFileName:  $('selectedFileName'),
-  selectedFileSize:  $('selectedFileSize'),
-  clearFile:         $('clearFile'),
-  languageSelect:    $('languageSelect'),
-  modelSelect:       $('modelSelect'),
-  groqModelGroup:    $('groqModelGroup'),
-  ovModelGroup:      $('ovModelGroup'),
-  ovModelSelect:     $('ovModelSelect'),
-  ovSourceBtn:       $('ovSourceBtn'),
-  sourceOptions:     $('sourceOptions'),
-  uploadHint:        $('uploadHint'),
-  transcribeBtn:     $('transcribeBtn'),
-  progressPanel:     $('progressPanel'),
-  progressLabel:     $('progressLabel'),
-  progressBar:       $('progressBar'),
-  progressFilename:  $('progressFilename'),
-  progressEta:       $('progressEta'),
-  phaseSection:      $('phaseSection'),
-  phaseLabel:        $('phaseLabel'),
-  phaseBar:          $('phaseBar'),
-  phasePct:          $('phasePct'),
-  backBtn:           $('backBtn'),
-  metaFilename:      $('metaFilename'),
-  metaDuration:      $('metaDuration'),
-  metaLanguage:      $('metaLanguage'),
-  exportBtn:         $('exportBtn'),
-  exportMenu:        $('exportMenu'),
-  copyBtn:           $('copyBtn'),
-  segmentView:       $('segmentView'),
-  historyList:       $('historyList'),
-  historyEmpty:      $('historyEmpty'),
-  bulkBar:           $('bulkBar'),
-  bulkCount:         $('bulkCount'),
-  bulkDeleteBtn:     $('bulkDeleteBtn'),
-  selectAllCheck:    $('selectAllCheck'),
-  apiStatus:         $('apiStatus'),
-  toastContainer:    $('toastContainer'),
-  usageEmpty:        $('usageEmpty'),
-  usageData:         $('usageData'),
-  ucReqMetric:       $('ucReqMetric'),
-  ucReqNums:         $('ucReqNums'),
-  ucReqFill:         $('ucReqFill'),
-  ucAudioMetric:     $('ucAudioMetric'),
-  ucAudioNums:       $('ucAudioNums'),
-  ucAudioFill:       $('ucAudioFill'),
-  ucReset:           $('ucReset'),
+  navBtns:              document.querySelectorAll('.nav-btn'),
+  views:                { upload: $('uploadView'), history: $('historyView'), transcript: $('transcriptView') },
+  dropZone:             $('dropZone'),
+  fileInput:            $('fileInput'),
+  browseBtn:            $('browseBtn'),
+  optionsPanel:         $('optionsPanel'),
+  selectedFileName:     $('selectedFileName'),
+  selectedFileDuration: $('selectedFileDuration'),
+  clearFile:            $('clearFile'),
+  languageSelect:       $('languageSelect'),
+  modelSelect:          $('modelSelect'),
+  groqModelGroup:       $('groqModelGroup'),
+  ovModelGroup:         $('ovModelGroup'),
+  ovModelSelect:        $('ovModelSelect'),
+  ovSourceBtn:          $('ovSourceBtn'),
+  sourceOptions:        $('sourceOptions'),
+  uploadHint:           $('uploadHint'),
+  transcribeBtn:        $('transcribeBtn'),
+  progressPanel:        $('progressPanel'),
+  progressLabel:        $('progressLabel'),
+  progressBar:          $('progressBar'),
+  progressFilename:     $('progressFilename'),
+  progressEta:          $('progressEta'),
+  phaseSection:         $('phaseSection'),
+  phaseLabel:           $('phaseLabel'),
+  phaseBar:             $('phaseBar'),
+  phasePct:             $('phasePct'),
+  backBtn:              $('backBtn'),
+  metaFilename:         $('metaFilename'),
+  metaDuration:         $('metaDuration'),
+  metaLanguage:         $('metaLanguage'),
+  exportBtn:            $('exportBtn'),
+  exportMenu:           $('exportMenu'),
+  copyBtn:              $('copyBtn'),
+  segmentView:          $('segmentView'),
+  historyList:          $('historyList'),
+  historyEmpty:         $('historyEmpty'),
+  bulkBar:              $('bulkBar'),
+  bulkCount:            $('bulkCount'),
+  bulkDeleteBtn:        $('bulkDeleteBtn'),
+  selectAllCheck:       $('selectAllCheck'),
+  apiStatus:            $('apiStatus'),
+  toastContainer:       $('toastContainer'),
+  usageEmpty:           $('usageEmpty'),
+  usageData:            $('usageData'),
+  ucReqMetric:          $('ucReqMetric'),
+  ucReqNums:            $('ucReqNums'),
+  ucReqFill:            $('ucReqFill'),
+  ucAudioMetric:        $('ucAudioMetric'),
+  ucAudioNums:          $('ucAudioNums'),
+  ucAudioFill:          $('ucAudioFill'),
+  ucReset:              $('ucReset'),
 };
 
-// Groq max audio duration at 32 kbps → 25 MB ≈ 104 minutes
-const GROQ_MAX_DURATION_S = 6250;
+const GROQ_MAX_DURATION_S = 6250; // ~104 min at 32 kbps = 25 MB
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 function connectWS() {
@@ -110,6 +111,33 @@ function setStatus(ok) {
 }
 
 function handleWsMessage(msg) {
+  // ── Preprocessing events ──────────────────────────────────────────────────
+  if (msg.type === 'preprocess_progress') {
+    if (msg.preprocess_id !== state.preprocessId) return;
+    updateProgress(
+      5 + Math.round((msg.phase_pct || 0) * 0.25),
+      msg.label || 'Preprocessing audio…',
+      'preprocess',
+      msg.phase_pct ?? 0,
+    );
+    return;
+  }
+
+  if (msg.type === 'preprocess_done') {
+    if (msg.preprocess_id !== state.preprocessId) return;
+    state.audioDuration = msg.duration_s ?? null;
+    _showOptionsAfterPreprocess(msg.duration_s);
+    return;
+  }
+
+  if (msg.type === 'preprocess_error') {
+    if (msg.preprocess_id !== state.preprocessId) return;
+    clearSelection();
+    showToast(`Preprocessing failed: ${msg.error}`, 'error', 8000);
+    return;
+  }
+
+  // ── Transcription events ──────────────────────────────────────────────────
   if (msg.id && msg.id !== state.currentTranscriptionId) return;
 
   if (msg.type === 'progress') {
@@ -139,7 +167,22 @@ function handleWsMessage(msg) {
   }
 }
 
-// ─── Polling fallback ─────────────────────────────────────────────────────────
+// After preprocessing completes, show the options panel with duration info
+function _showOptionsAfterPreprocess(duration_s) {
+  el.progressPanel.hidden = true;
+  el.phaseSection.hidden  = true;
+  el.progressEta.textContent = '';
+
+  el.selectedFileName.textContent = state.selectedFile?.name || '';
+  el.selectedFileDuration.textContent = duration_s
+    ? '⏱ ' + secondsToHMMSS(duration_s)
+    : '';
+  el.optionsPanel.querySelector('.file-icon').textContent =
+    getFileIcon(state.selectedFile?.name || '');
+  el.optionsPanel.hidden = false;
+}
+
+// ─── Polling fallback (transcription only) ────────────────────────────────────
 function startPolling(id) {
   stopPolling();
   state.pollTimer = setInterval(async () => {
@@ -178,10 +221,7 @@ function startPolling(id) {
 }
 
 function stopPolling() {
-  if (state.pollTimer) {
-    clearInterval(state.pollTimer);
-    state.pollTimer = null;
-  }
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
 }
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
@@ -200,11 +240,9 @@ function showView(name) {
   if (name === 'history') refreshHistory();
 }
 
-el.navBtns.forEach(btn => {
-  btn.addEventListener('click', () => showView(btn.dataset.view));
-});
+el.navBtns.forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.view)));
 
-// ─── File Selection ───────────────────────────────────────────────────────────
+// ─── File Selection + auto-preprocess ────────────────────────────────────────
 function formatBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
@@ -216,23 +254,24 @@ function getFileIcon(name) {
   return ['mp4','mkv','mov','avi','webm','flv','wmv'].includes(ext) ? '🎬' : '🎵';
 }
 
-function setSelectedFile(file) {
-  if (!file) {
-    state.selectedFile = null;
-    el.optionsPanel.hidden = true;
-    return;
-  }
-  state.selectedFile = file;
-  el.selectedFileName.textContent = file.name;
-  el.selectedFileSize.textContent = formatBytes(file.size);
-  el.optionsPanel.querySelector('.file-icon').textContent = getFileIcon(file.name);
-  el.optionsPanel.hidden = false;
+function clearSelection() {
+  state.selectedFile  = null;
+  state.preprocessId  = null;
+  state.audioDuration = null;
+  el.optionsPanel.hidden  = true;
+  el.progressPanel.hidden = true;
+  el.phaseSection.hidden  = true;
+  el.progressEta.textContent = '';
+  el.fileInput.value = '';
 }
+
+el.clearFile.addEventListener('click', (e) => { e.stopPropagation(); clearSelection(); });
 
 el.browseBtn.addEventListener('click', (e) => { e.stopPropagation(); el.fileInput.click(); });
 el.dropZone.addEventListener('click', () => el.fileInput.click());
-el.fileInput.addEventListener('change', () => { if (el.fileInput.files[0]) setSelectedFile(el.fileInput.files[0]); });
-el.clearFile.addEventListener('click', (e) => { e.stopPropagation(); el.fileInput.value = ''; setSelectedFile(null); });
+el.fileInput.addEventListener('change', () => {
+  if (el.fileInput.files[0]) handleFileSelected(el.fileInput.files[0]);
+});
 
 el.dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); el.dropZone.classList.add('drag-over'); });
 el.dropZone.addEventListener('dragleave', ()  => el.dropZone.classList.remove('drag-over'));
@@ -240,71 +279,88 @@ el.dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   el.dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
-  if (file) setSelectedFile(file);
+  if (file) handleFileSelected(file);
 });
 
-// ─── Audio duration detection ─────────────────────────────────────────────────
-function getFileDuration(file) {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const media = document.createElement('video');
-    media.preload = 'metadata';
-    media.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(media.duration); };
-    media.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-    media.src = url;
-  });
+async function handleFileSelected(file) {
+  clearSelection();   // cancel any in-progress preprocessing
+  state.selectedFile = file;
+
+  // Show preprocessing progress immediately
+  el.progressFilename.textContent = file.name;
+  el.progressEta.textContent = '';
+  el.progressPanel.hidden = false;
+  el.phaseSection.hidden  = false;
+  el.phaseBar.style.width = '0%';
+  el.phasePct.textContent = '0%';
+  updateProgress(3, 'Uploading…', 'preprocess', 0);
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch('/api/transcriptions/preprocess', { method: 'POST', body: formData });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Upload failed (${res.status})`);
+    }
+    const { preprocess_id } = await res.json();
+    state.preprocessId = preprocess_id;
+
+    // Subscribe to preprocessing events on this channel
+    if (state.ws?.readyState === 1) {
+      state.ws.send(JSON.stringify({ type: 'register', sessionId: preprocess_id }));
+    }
+
+    updateProgress(5, 'Preprocessing audio…', 'preprocess', 0);
+
+  } catch (err) {
+    clearSelection();
+    showToast(err.message, 'error', 8000);
+  }
 }
 
 // ─── Upload & Transcribe ──────────────────────────────────────────────────────
 el.transcribeBtn.addEventListener('click', async () => {
-  if (!state.selectedFile) return;
+  if (!state.preprocessId) return;
 
   const src = getSource();
 
-  // Groq: validate audio duration before upload
-  if (src === 'groq') {
-    const duration = await getFileDuration(state.selectedFile);
-    if (duration && duration > GROQ_MAX_DURATION_S) {
-      const mins = Math.round(duration / 60);
-      showToast(
-        `Audio is ${mins} min — Groq supports up to ~104 min after compression. ` +
-        `Try splitting the file or use Intel GPU for long audio.`,
-        'error', 10000
-      );
-      return;
-    }
+  // Groq: validate duration
+  if (src === 'groq' && state.audioDuration && state.audioDuration > GROQ_MAX_DURATION_S) {
+    const mins = Math.round(state.audioDuration / 60);
+    showToast(
+      `Audio is ${mins} min — Groq supports up to ~104 min. Use Intel GPU for long audio.`,
+      'error', 10000
+    );
+    return;
   }
 
   const formData = new FormData();
-  formData.append('file',     state.selectedFile);
-  formData.append('language', el.languageSelect.value   || 'auto');
-  formData.append('model',    el.modelSelect.value      || 'whisper-large-v3-turbo');
-  formData.append('source',   src);
-  formData.append('ov_model', el.ovModelSelect.value    || 'small');
+  formData.append('preprocess_id', state.preprocessId);
+  formData.append('language',      el.languageSelect.value  || 'auto');
+  formData.append('model',         el.modelSelect.value     || 'whisper-large-v3-turbo');
+  formData.append('source',        src);
+  formData.append('ov_model',      el.ovModelSelect.value   || 'small');
 
-  el.optionsPanel.hidden = true;
-  el.progressPanel.hidden = false;
-  el.progressFilename.textContent = state.selectedFile.name;
-  el.progressEta.textContent = '';
-  el.phaseSection.hidden = true;
+  el.optionsPanel.hidden      = true;
+  el.progressPanel.hidden     = false;
+  el.phaseSection.hidden      = true;
+  el.progressFilename.textContent = state.selectedFile?.name || '';
+  el.progressEta.textContent  = '';
   state.transcriptionStartTime = Date.now();
-  updateProgress(2, 'Uploading…', null, null);
+  updateProgress(3, 'Starting transcription…', null, null);
 
   try {
     const res = await fetch('/api/transcriptions', { method: 'POST', body: formData });
-
     if (!res.ok) {
-      let msg = `Server error ${res.status}`;
-      try {
-        const body = await res.json();
-        msg = body.detail || body.error || body.message || msg;
-      } catch (_) {}
-      throw new Error(msg);
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || body.error || `Server error ${res.status}`);
     }
 
     const data = await res.json();
     state.currentTranscriptionId = data.id;
-    updateProgress(10, 'Waiting for engine…');
+    state.preprocessId = null;   // consumed
 
     if (state.ws?.readyState === 1) {
       state.ws.send(JSON.stringify({ type: 'register', sessionId: data.id }));
@@ -316,9 +372,8 @@ el.transcribeBtn.addEventListener('click', async () => {
   } catch (err) {
     stopPolling();
     state.transcriptionStartTime = null;
-    el.progressPanel.hidden = true;
-    el.progressEta.textContent = '';
-    el.optionsPanel.hidden = false;
+    el.progressPanel.hidden  = true;
+    el.optionsPanel.hidden   = false;
     showToast(err.message, 'error', 8000);
   }
 });
@@ -328,9 +383,8 @@ function updateProgress(pct, label, phase, phasePct) {
   el.progressBar.style.width = pct + '%';
   if (label) el.progressLabel.textContent = label;
 
-  // Phase bar: visible only during preprocessing
   if (phase === 'preprocess' && phasePct != null) {
-    el.phaseSection.hidden = false;
+    el.phaseSection.hidden  = false;
     el.phaseBar.style.width = phasePct + '%';
     el.phasePct.textContent = phasePct + '%';
     el.phaseLabel.textContent = 'Preprocessing';
@@ -338,23 +392,20 @@ function updateProgress(pct, label, phase, phasePct) {
     el.phaseSection.hidden = true;
   }
 
-  // ETA: only during active transcription (not upload/preprocessing/done)
+  // ETA only during transcription (not preprocessing)
   if (state.transcriptionStartTime && pct > 30 && pct < 95) {
     const elapsed = (Date.now() - state.transcriptionStartTime) / 1000;
     if (elapsed > 4) {
       const rate = pct / elapsed;
       const remaining = Math.ceil((100 - pct) / rate);
       if (remaining > 3) {
-        const m = Math.floor(remaining / 60);
-        const s = remaining % 60;
-        el.progressEta.textContent = m > 0
-          ? `~${m}m ${s}s remaining`
-          : `~${s}s remaining`;
+        const m = Math.floor(remaining / 60), s = remaining % 60;
+        el.progressEta.textContent = m > 0 ? `~${m}m ${s}s remaining` : `~${s}s remaining`;
       } else {
         el.progressEta.textContent = '';
       }
     }
-  } else if (pct >= 95 || pct <= 10) {
+  } else if (pct >= 95 || !state.transcriptionStartTime) {
     el.progressEta.textContent = '';
   }
 }
@@ -364,6 +415,14 @@ function secondsToMMSS(s) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+function secondsToHMMSS(s) {
+  const h   = Math.floor(s / 3600);
+  const m   = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
 }
 
 async function loadTranscription(id) {
@@ -378,7 +437,7 @@ async function loadTranscription(id) {
       ? `🌐 ${data.language.toUpperCase()}` : '';
 
     el.segmentView.innerHTML = '';
-    const segments = data.segments || [];
+    const segments    = data.segments || [];
     const hasSpeakers = segments.some(s => s.speaker);
 
     if (segments.length > 0) {
@@ -386,20 +445,17 @@ async function loadTranscription(id) {
       segments.forEach(seg => {
         const div = document.createElement('div');
         div.className = 'segment';
-
         const timeHtml = `<span class="seg-time">${secondsToMMSS(seg.start)}</span>`;
 
         if (hasSpeakers && seg.speaker) {
           const spkClass = 'spk-' + (seg.speaker.slice(-1).toLowerCase());
           const badgeHtml = (seg.speaker !== lastSpeaker)
-            ? `<span class="seg-speaker ${spkClass}">${escapeHtml(seg.speaker)}</span>`
-            : '';
+            ? `<span class="seg-speaker ${spkClass}">${escapeHtml(seg.speaker)}</span>` : '';
           lastSpeaker = seg.speaker;
           div.innerHTML = `${timeHtml}<div class="seg-content">${badgeHtml}<span class="seg-text">${escapeHtml(seg.text.trim())}</span></div>`;
         } else {
           div.innerHTML = `${timeHtml}<span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
         }
-
         el.segmentView.appendChild(div);
       });
     } else if (data.transcript) {
@@ -412,8 +468,7 @@ async function loadTranscription(id) {
 
     state.currentTranscriptionId = id;
     showView('transcript');
-    el.fileInput.value = '';
-    setSelectedFile(null);
+    clearSelection();
     el.progressPanel.hidden = true;
   } catch (err) {
     showToast('Failed to load transcription: ' + err.message, 'error', 8000);
@@ -444,15 +499,12 @@ el.copyBtn.addEventListener('click', async () => {
     } else {
       const ta = Object.assign(document.createElement('textarea'),
         { value: texts, style: 'position:fixed;opacity:0' });
-      document.body.appendChild(ta);
-      ta.focus(); ta.select();
+      document.body.appendChild(ta); ta.focus(); ta.select();
       document.execCommand('copy');
       document.body.removeChild(ta);
     }
     showToast('Copied to clipboard!', 'success');
-  } catch (_) {
-    showToast('Copy failed — select the text manually', 'error');
-  }
+  } catch (_) { showToast('Copy failed — select the text manually', 'error'); }
 });
 
 // ─── Back Button ─────────────────────────────────────────────────────────────
@@ -473,19 +525,17 @@ function getSelectedIds() {
 }
 
 function updateBulkBar() {
-  const checks = [...el.historyList.querySelectorAll('.history-check')];
+  const checks   = [...el.historyList.querySelectorAll('.history-check')];
   const selected = checks.filter(c => c.checked);
-  const count = selected.length;
+  const count    = selected.length;
 
-  el.bulkBar.hidden = count === 0;
+  el.bulkBar.hidden   = count === 0;
   el.bulkCount.textContent = `${count} selected`;
-  el.selectAllCheck.checked = count > 0 && count === checks.length;
+  el.selectAllCheck.checked       = count > 0 && count === checks.length;
   el.selectAllCheck.indeterminate = count > 0 && count < checks.length;
 
-  // Highlight selected rows
   el.historyList.querySelectorAll('.history-item').forEach(row => {
-    const cb = row.querySelector('.history-check');
-    row.classList.toggle('selected', cb?.checked ?? false);
+    row.classList.toggle('selected', row.querySelector('.history-check')?.checked ?? false);
   });
 }
 
@@ -538,7 +588,6 @@ function renderHistory(items) {
   });
 }
 
-// Bulk delete
 el.bulkDeleteBtn.addEventListener('click', async () => {
   const ids = getSelectedIds();
   if (!ids.length) return;
@@ -548,7 +597,6 @@ el.bulkDeleteBtn.addEventListener('click', async () => {
   refreshHistory();
 });
 
-// Select all / deselect all
 el.selectAllCheck.addEventListener('change', () => {
   el.historyList.querySelectorAll('.history-check').forEach(cb => {
     cb.checked = el.selectAllCheck.checked;
@@ -590,7 +638,6 @@ async function loadUsage() {
     const res = await fetch('/api/usage');
     if (!res.ok) return;
     const d = await res.json();
-
     if (!d.last_updated) return;
 
     el.usageEmpty.hidden = true;
@@ -620,7 +667,6 @@ async function loadUsage() {
       _resetLabel(d.tokens_reset,   'Audio quota'),
     ].filter(Boolean);
     el.ucReset.textContent = resets[0] || '';
-
   } catch (_) {}
 }
 

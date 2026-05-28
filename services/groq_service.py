@@ -67,8 +67,8 @@ def get_last_usage() -> dict:
 
 
 # ── Audio preprocessing ───────────────────────────────────────────────────────
-def _get_audio_duration(file_path: str) -> float | None:
-    """Use ffprobe to get audio duration in seconds."""
+def get_audio_duration(file_path: str) -> float | None:
+    """Use ffprobe to get audio/video duration in seconds."""
     try:
         r = subprocess.run(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
@@ -126,7 +126,7 @@ def preprocess_audio(file_path: str, progress_cb=None) -> tuple[str, bool]:
         cmd += ["-y", tmp]
 
         if progress_cb:
-            duration_s = _get_audio_duration(file_path)
+            duration_s = get_audio_duration(file_path)
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             while proc.poll() is None:
                 if duration_s and prog_path:
