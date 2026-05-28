@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 
 from services.database import (
     create_transcription,
@@ -213,6 +214,18 @@ async def create(
     )
 
     return record
+
+
+# ── Stream audio ─────────────────────────────────────────────────────────────
+@router.get("/{id}/audio")
+async def get_audio(id: str):
+    item = get_transcription(id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    path = UPLOAD_DIR / item["filename"]
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return FileResponse(str(path), media_type="audio/mpeg")
 
 
 # ── Delete ────────────────────────────────────────────────────────────────────

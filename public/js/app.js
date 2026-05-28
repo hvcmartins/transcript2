@@ -21,6 +21,15 @@ const state = {
   transcriptionStartTime: null,
 };
 
+// ─── Audio Player ─────────────────────────────────────────────────────────────
+const player = {
+  audio:      new Audio(),
+  txId:       null,   // transcription id currently loaded
+  wordSpans:  [],     // cached word <span> elements for karaoke
+  rafId:      null,
+  activeSpan: null,
+};
+
 // ─── DOM Refs ────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -76,6 +85,18 @@ const el = {
   ucAudioNums:          $('ucAudioNums'),
   ucAudioFill:          $('ucAudioFill'),
   ucReset:              $('ucReset'),
+  transcriptPlayBtn:    $('transcriptPlayBtn'),
+  tPlayIcon:            $('tPlayIcon'),
+  tPauseIcon:           $('tPauseIcon'),
+  playerBar:            $('playerBar'),
+  playerPlayBtn:        $('playerPlayBtn'),
+  playerPlayIcon:       $('playerPlayIcon'),
+  playerPauseIcon:      $('playerPauseIcon'),
+  playerFilename:       $('playerFilename'),
+  playerCurrent:        $('playerCurrent'),
+  playerTotal:          $('playerTotal'),
+  playerSeek:           $('playerSeek'),
+  playerCloseBtn:       $('playerCloseBtn'),
 };
 
 
@@ -428,26 +449,59 @@ async function loadTranscription(id) {
 
     el.segmentView.innerHTML = '';
     const segments    = data.segments || [];
+    const words       = data.words    || [];
     const hasSpeakers = segments.some(s => s.speaker);
+    const hasWords    = words.length > 0;
 
     if (segments.length > 0) {
       let lastSpeaker = null;
+      let wi = 0; // word index cursor
+
       segments.forEach(seg => {
         const div = document.createElement('div');
         div.className = 'segment';
-        const timeHtml = `<span class="seg-time">${secondsToMMSS(seg.start)}</span>`;
+        const timeHtml = `<span class="seg-time" data-t="${seg.start}">${secondsToMMSS(seg.start)}</span>`;
+
+        let bodyHtml;
+        if (hasWords) {
+          // collect words that belong to this segment
+          let whtml = '';
+          while (wi < words.length && words[wi].start < seg.end - 0.05) {
+            const w = words[wi++];
+            whtml += `<span class="word" data-s="${w.start}" data-e="${w.end}">${escapeHtml(w.word)}</span>`;
+          }
+          bodyHtml = whtml || `<span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
+        } else {
+          bodyHtml = `<span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
+        }
 
         if (hasSpeakers && seg.speaker) {
-          const spkClass = 'spk-' + (seg.speaker.slice(-1).toLowerCase());
-          const badgeHtml = (seg.speaker !== lastSpeaker)
+          const spkClass  = 'spk-' + seg.speaker.slice(-1).toLowerCase();
+          const badgeHtml = seg.speaker !== lastSpeaker
             ? `<span class="seg-speaker ${spkClass}">${escapeHtml(seg.speaker)}</span>` : '';
           lastSpeaker = seg.speaker;
-          div.innerHTML = `${timeHtml}<div class="seg-content">${badgeHtml}<span class="seg-text">${escapeHtml(seg.text.trim())}</span></div>`;
+          div.innerHTML = `${timeHtml}<div class="seg-content">${badgeHtml}<span class="seg-words">${bodyHtml}</span></div>`;
         } else {
-          div.innerHTML = `${timeHtml}<span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
+          div.innerHTML = `${timeHtml}<span class="seg-words">${bodyHtml}</span>`;
         }
         el.segmentView.appendChild(div);
       });
+
+      // Any leftover words appended to last segment (edge case)
+      if (hasWords && wi < words.length) {
+        const lastWords = el.segmentView.querySelector('.segment:last-child .seg-words');
+        if (lastWords) {
+          while (wi < words.length) {
+            const w = words[wi++];
+            const sp = document.createElement('span');
+            sp.className = 'word';
+            sp.dataset.s = w.start;
+            sp.dataset.e = w.end;
+            sp.textContent = w.word;
+            lastWords.appendChild(sp);
+          }
+        }
+      }
     } else if (data.transcript) {
       const div = document.createElement('div');
       div.className = 'segment';
@@ -456,7 +510,20 @@ async function loadTranscription(id) {
       el.segmentView.appendChild(div);
     }
 
+    // Cache word spans for karaoke and wire up click-to-seek
+    player.wordSpans = Array.from(el.segmentView.querySelectorAll('.word[data-s]'));
+    player.wordSpans.forEach(sp => {
+      sp.addEventListener('click', () => playerSeekTo(id, parseFloat(sp.dataset.s)));
+    });
+
+    // Seek clicks on segment timestamps too
+    el.segmentView.querySelectorAll('.seg-time[data-t]').forEach(sp => {
+      sp.addEventListener('click', () => playerSeekTo(id, parseFloat(sp.dataset.t)));
+      sp.style.cursor = 'pointer';
+    });
+
     state.currentTranscriptionId = id;
+    _syncTranscriptPlayBtn();
     showView('transcript');
     clearSelection();
     el.progressPanel.hidden = true;
@@ -468,6 +535,165 @@ async function loadTranscription(id) {
 function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ─── Player ───────────────────────────────────────────────────────────────────
+function playerLoad(txId, originalName) {
+  if (player.txId === txId) return; // already loaded
+  player.txId = txId;
+  player.audio.src = `/api/transcriptions/${txId}/audio`;
+  player.audio.load();
+  el.playerFilename.textContent = originalName;
+  el.playerTotal.textContent    = '…';
+  el.playerCurrent.textContent  = '0:00';
+  el.playerSeek.value           = 0;
+}
+
+function playerSeekTo(txId, t) {
+  const originalName = el.metaFilename.textContent || '';
+  if (player.txId !== txId) {
+    playerLoad(txId, originalName);
+    const onReady = () => {
+      player.audio.removeEventListener('canplay', onReady);
+      player.audio.currentTime = t;
+      player.audio.play();
+    };
+    player.audio.addEventListener('canplay', onReady);
+  } else {
+    player.audio.currentTime = t;
+    player.audio.play();
+  }
+}
+
+function playerToggle(txId, originalName) {
+  playerLoad(txId, originalName);
+  if (player.audio.paused) player.audio.play();
+  else player.audio.pause();
+}
+
+function playerClose() {
+  player.audio.pause();
+  player.audio.src   = '';
+  player.txId        = null;
+  player.wordSpans   = [];
+  player.activeSpan  = null;
+  cancelAnimationFrame(player.rafId);
+  el.playerBar.hidden = true;
+  document.body.classList.remove('player-on');
+  _syncTranscriptPlayBtn();
+  _syncHistoryPlayBtns();
+}
+
+// Karaoke: advance highlight every animation frame while playing
+function _karaokeFrame() {
+  if (player.audio.paused) return;
+  const t     = player.audio.currentTime;
+  const spans = player.wordSpans;
+
+  // Binary search: last span whose start ≤ t
+  let lo = 0, hi = spans.length - 1, found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (parseFloat(spans[mid].dataset.s) <= t) { found = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+
+  const next = found >= 0 ? spans[found] : null;
+  if (next !== player.activeSpan) {
+    player.activeSpan?.classList.remove('k-on');
+    next?.classList.add('k-on');
+    player.activeSpan = next;
+    if (next && state.currentView === 'transcript' && player.txId === state.currentTranscriptionId) {
+      next.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+  player.rafId = requestAnimationFrame(_karaokeFrame);
+}
+
+function _syncTranscriptPlayBtn() {
+  if (!el.transcriptPlayBtn) return;
+  const isPlaying = !player.audio.paused && player.txId === state.currentTranscriptionId;
+  el.tPlayIcon.hidden  = isPlaying;
+  el.tPauseIcon.hidden = !isPlaying;
+}
+
+function _syncHistoryPlayBtns() {
+  document.querySelectorAll('.hist-play').forEach(btn => {
+    const active = !player.audio.paused && btn.dataset.id === player.txId;
+    btn.classList.toggle('active', active);
+    const ico = btn.querySelector('.hp-icon');
+    if (ico) ico.textContent = active ? '⏸' : '▶';
+  });
+}
+
+// Wire up player audio element events once
+player.audio.addEventListener('play', () => {
+  el.playerBar.hidden = false;
+  document.body.classList.add('player-on');
+  el.playerPlayIcon.hidden  = true;
+  el.playerPauseIcon.hidden = false;
+  el.playerPlayBtn.classList.remove('paused');
+  _syncTranscriptPlayBtn();
+  _syncHistoryPlayBtns();
+  player.rafId = requestAnimationFrame(_karaokeFrame);
+});
+
+player.audio.addEventListener('pause', () => {
+  el.playerPlayIcon.hidden  = false;
+  el.playerPauseIcon.hidden = true;
+  el.playerPlayBtn.classList.add('paused');
+  _syncTranscriptPlayBtn();
+  _syncHistoryPlayBtns();
+  cancelAnimationFrame(player.rafId);
+});
+
+player.audio.addEventListener('ended', () => {
+  player.audio.currentTime  = 0;
+  el.playerPlayIcon.hidden  = false;
+  el.playerPauseIcon.hidden = true;
+  player.activeSpan?.classList.remove('k-on');
+  player.activeSpan = null;
+  el.playerSeek.value = 0;
+  el.playerCurrent.textContent = secondsToMMSS(0);
+  _syncTranscriptPlayBtn();
+  _syncHistoryPlayBtns();
+});
+
+player.audio.addEventListener('timeupdate', () => {
+  const t = player.audio.currentTime;
+  const d = player.audio.duration || 0;
+  el.playerCurrent.textContent = secondsToMMSS(t);
+  if (d > 0) el.playerSeek.value = t / d;
+});
+
+player.audio.addEventListener('durationchange', () => {
+  const d = player.audio.duration;
+  if (d && isFinite(d)) el.playerTotal.textContent = secondsToMMSS(d);
+});
+
+player.audio.addEventListener('error', () => {
+  showToast('Audio playback error', 'error');
+  playerClose();
+});
+
+// Player bar controls
+el.playerPlayBtn.addEventListener('click', () => {
+  if (player.audio.paused) player.audio.play();
+  else player.audio.pause();
+});
+
+el.playerCloseBtn.addEventListener('click', playerClose);
+
+el.playerSeek.addEventListener('input', () => {
+  const d = player.audio.duration || 0;
+  if (d > 0) player.audio.currentTime = parseFloat(el.playerSeek.value) * d;
+});
+
+// Transcript toolbar play button
+el.transcriptPlayBtn?.addEventListener('click', () => {
+  const id = state.currentTranscriptionId;
+  if (!id) return;
+  playerToggle(id, el.metaFilename.textContent || '');
+});
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 el.exportBtn.addEventListener('click', (e) => { e.stopPropagation(); el.exportMenu.classList.toggle('open'); });
@@ -542,6 +768,9 @@ function renderHistory(items) {
   items.forEach(item => {
     const div = document.createElement('div');
     div.className = 'history-item';
+    const playBtn = item.status === 'completed'
+      ? `<button class="hist-play" data-id="${item.id}" title="Play audio"><span class="hp-icon">▶</span> Play</button>`
+      : '';
     div.innerHTML = `
       <label class="history-check-wrap" title="Select">
         <input type="checkbox" class="history-check" data-id="${item.id}">
@@ -556,6 +785,7 @@ function renderHistory(items) {
         </div>
       </div>
       <span class="history-badge badge-${item.status}">${item.status}</span>
+      ${playBtn}
       <button class="history-delete" data-id="${item.id}" title="Delete">🗑</button>
     `;
 
@@ -564,11 +794,20 @@ function renderHistory(items) {
     if (item.status === 'completed') {
       div.querySelector('.history-info').addEventListener('click', () => loadTranscription(item.id));
       div.querySelector('.history-icon').addEventListener('click', () => loadTranscription(item.id));
+
+      const hplay = div.querySelector('.hist-play');
+      if (hplay) {
+        hplay.addEventListener('click', (e) => {
+          e.stopPropagation();
+          playerToggle(item.id, item.original_name);
+        });
+      }
     }
 
     div.querySelector('.history-delete').addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!confirm('Delete this transcription?')) return;
+      if (player.txId === item.id) playerClose();
       await fetch(`/api/transcriptions/${item.id}`, { method: 'DELETE' });
       showToast('Deleted', 'info');
       refreshHistory();
@@ -576,6 +815,9 @@ function renderHistory(items) {
 
     el.historyList.appendChild(div);
   });
+
+  // Reflect current playing state on newly rendered buttons
+  _syncHistoryPlayBtns();
 }
 
 el.bulkDeleteBtn.addEventListener('click', async () => {
