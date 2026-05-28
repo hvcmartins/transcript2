@@ -213,6 +213,12 @@
         </div>
 
         <div class="transcript-actions">
+          <button class="btn-icon" id="findReplaceBtn" title="Find &amp; Replace (Ctrl+H)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
+          <button class="btn-icon" id="confToggleBtn" title="Confidence highlighting">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </button>
           <button class="btn-icon" id="editToggleBtn" title="Edit transcript">
             <svg id="editIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             <svg id="saveIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" hidden><polyline points="20 6 9 17 4 12"/></svg>
@@ -259,6 +265,29 @@
         </button>
       </div>
 
+      <div id="findReplaceBar" hidden>
+        <div class="fr-row">
+          <span class="fr-label">Find</span>
+          <input type="text" id="frFind" class="fr-input" placeholder="Search text…" autocomplete="off">
+          <button id="frPrev" class="fr-btn" title="Previous match">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><polyline points="18 15 12 9 6 15"/></svg>
+          </button>
+          <button id="frNext" class="fr-btn" title="Next match">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <span id="frCount" class="fr-count"></span>
+          <button id="frClose" class="fr-close" title="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div id="frReplaceRow" class="fr-row">
+          <span class="fr-label">Replace</span>
+          <input type="text" id="frReplace" class="fr-input" placeholder="Replace with…" autocomplete="off">
+          <button id="frReplaceOne" class="fr-btn">Replace</button>
+          <button id="frReplaceAll" class="fr-btn">Replace all</button>
+        </div>
+      </div>
+
       <div class="transcript-body" id="transcriptBody">
         <div class="segment-view" id="segmentView"></div>
       </div>
@@ -269,6 +298,12 @@
       <div class="view-header">
         <h2>Transcription History</h2>
         <p>All your previous transcriptions stored locally</p>
+      </div>
+
+      <div class="history-search">
+        <svg class="hs-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" id="historySearch" placeholder="Search by name or transcript content…" autocomplete="off">
+        <span id="historySearchCount" class="hs-count"></span>
       </div>
 
       <!-- Bulk action bar — appears when items are selected -->

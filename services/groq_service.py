@@ -51,6 +51,18 @@ _client: Groq | None = None
 _last_usage: dict = {}
 
 
+def _parse_wait_seconds(reset_str: str | None, default: float = 62.0) -> float:
+    """Parse Groq reset header like '1m30s', '45s', '2h' → seconds."""
+    if not reset_str:
+        return default
+    import re
+    total = 0.0
+    for m in re.finditer(r'(\d+(?:\.\d+)?)([hms])', reset_str):
+        val, unit = float(m.group(1)), m.group(2)
+        total += val * {'h': 3600, 'm': 60, 's': 1}[unit]
+    return total if total > 0 else default
+
+
 def get_client() -> Groq:
     global _client
     if not _client:
@@ -301,17 +313,19 @@ def _call_groq(client, file_path: str, language: str, model: str) -> dict:
     segments = []
     for seg in response.segments or []:
         segments.append({
-            "start": _get(seg, "start", 0),
-            "end":   _get(seg, "end",   0),
-            "text":  _get(seg, "text",  ""),
+            "start":       _get(seg, "start", 0),
+            "end":         _get(seg, "end",   0),
+            "text":        _get(seg, "text",  ""),
+            "avg_logprob": _get(seg, "avg_logprob", None),
         })
 
     words = []
     for w in getattr(response, "words", None) or []:
         words.append({
-            "word":  _get(w, "word",  ""),
-            "start": _get(w, "start", 0),
-            "end":   _get(w, "end",   0),
+            "word":        _get(w, "word",  ""),
+            "start":       _get(w, "start", 0),
+            "end":         _get(w, "end",   0),
+            "probability": _get(w, "probability", None),
         })
 
     return {
@@ -353,7 +367,21 @@ def transcribe_file(
                 )
             if progress_cb:
                 progress_cb(i + 1, total)
-            results.append((_call_groq(client, chunk_path, language, model), time_offset))
+            for _attempt in range(4):
+                try:
+                    results.append((_call_groq(client, chunk_path, language, model), time_offset))
+                    break
+                except Exception as _exc:
+                    _is_rl = ('ratelimit' in type(_exc).__name__.lower() or '429' in str(_exc))
+                    if _is_rl and _attempt < 3:
+                        _hdrs = getattr(getattr(_exc, 'response', None), 'headers', {}) or {}
+                        _wait = _parse_wait_seconds(
+                            _hdrs.get('x-ratelimit-reset-tokens') or _hdrs.get('x-ratelimit-reset-requests')
+                        )
+                        print(f"[groq] rate limited on chunk {i+1}/{total}; waiting {_wait:.0f}s (attempt {_attempt+1}/4)")
+                        time.sleep(min(_wait + 2, 300))
+                    else:
+                        raise
     finally:
         for chunk_path, _ in chunks:
             if chunk_path != file_path:

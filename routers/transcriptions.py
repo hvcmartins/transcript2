@@ -55,8 +55,8 @@ async def get_meta():
 
 # ── List ──────────────────────────────────────────────────────────────────────
 @router.get("")
-async def list_transcriptions():
-    return get_all_transcriptions()
+async def list_transcriptions(q: Optional[str] = None):
+    return get_all_transcriptions(q)
 
 
 # ── Get one ───────────────────────────────────────────────────────────────────
@@ -82,6 +82,10 @@ async def edit_transcript(id: str, body: dict):
         fields["transcript"] = str(body["transcript"])
     if "segments" in body:
         fields["segments"] = json.dumps(body["segments"])
+    if "original_name" in body:
+        name = str(body["original_name"]).strip()
+        if name:
+            fields["original_name"] = name
     if not fields:
         raise HTTPException(status_code=400, detail="Nothing to update")
     update_transcription(id, fields)
@@ -242,6 +246,26 @@ async def get_audio(id: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
     return FileResponse(str(path), media_type="audio/mpeg")
+
+
+# ── Re-transcribe ─────────────────────────────────────────────────────────────
+@router.post("/{id}/retranscribe", status_code=202)
+async def retranscribe(id: str):
+    item = get_transcription(id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    src = UPLOAD_DIR / item["filename"]
+    if not src.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    preprocess_id = uuid.uuid4().hex
+    shutil.copy2(str(src), str(UPLOAD_DIR / f"{preprocess_id}.mp3"))
+    (UPLOAD_DIR / f"{preprocess_id}.json").write_text(json.dumps({
+        "original_name":   item["original_name"],
+        "original_size":   item["file_size"],
+        "compressed_size": item["file_size"],
+        "duration_s":      item.get("duration"),
+    }))
+    return {"preprocess_id": preprocess_id, "original_name": item["original_name"], "duration_s": item.get("duration")}
 
 
 # ── Delete ────────────────────────────────────────────────────────────────────

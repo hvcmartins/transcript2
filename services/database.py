@@ -77,17 +77,31 @@ def get_transcription(id: str) -> dict | None:
     return _row(row)
 
 
-def get_all_transcriptions() -> list[dict]:
-    rows = _get_db().execute(
-        """SELECT id, filename, original_name, file_size, duration, language,
-                  status, progress, error_msg, model, created_at, updated_at
-           FROM transcriptions ORDER BY created_at DESC"""
-    ).fetchall()
+def get_all_transcriptions(q: str | None = None) -> list[dict]:
+    if q:
+        like = f'%{q}%'
+        rows = _get_db().execute(
+            """SELECT id, filename, original_name, file_size, duration, language,
+                      status, progress, error_msg, model, created_at, updated_at,
+                      CASE WHEN lower(transcript) LIKE lower(:like)
+                           THEN substr(transcript, max(1, instr(lower(transcript), lower(:q)) - 40), 160)
+                           ELSE NULL END as snippet
+               FROM transcriptions
+               WHERE lower(original_name) LIKE lower(:like) OR lower(transcript) LIKE lower(:like)
+               ORDER BY created_at DESC""",
+            {"like": like, "q": q},
+        ).fetchall()
+    else:
+        rows = _get_db().execute(
+            """SELECT id, filename, original_name, file_size, duration, language,
+                      status, progress, error_msg, model, created_at, updated_at
+               FROM transcriptions ORDER BY created_at DESC"""
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
 def update_transcription(id: str, fields: dict) -> None:
-    allowed = {"status", "progress", "transcript", "segments", "words", "duration", "error_msg"}
+    allowed = {"status", "progress", "transcript", "segments", "words", "duration", "error_msg", "original_name"}
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if not filtered:
         return
