@@ -1229,7 +1229,7 @@ body { display: flex; min-height: 100vh; }
 
 /* ─── Confidence highlighting ────────────────────────────────────────── */
 #confToggleBtn.conf-active { color: var(--yellow); border-color: rgba(245,158,11,.4); }
-.word[data-conf] { transition: background 0.15s, color 0.15s; }
-.conf-mode .word[data-conf="mid"] { background: rgba(245,158,11,.18); border-radius: 3px; color: #fcd34d; }
-.conf-mode .word[data-conf="low"] { background: rgba(239,68,68,.2); border-radius: 3px; color: #fca5a5; }
+.word[data-conf], .seg-text[data-conf] { transition: background 0.15s, color 0.15s; }
+.conf-mode .word[data-conf="mid"], .conf-mode .seg-text[data-conf="mid"] { background: rgba(245,158,11,.18); border-radius: 3px; color: #fcd34d; }
+.conf-mode .word[data-conf="low"], .conf-mode .seg-text[data-conf="low"] { background: rgba(239,68,68,.2); border-radius: 3px; color: #fca5a5; }
 .hist-play.active { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,.12); }

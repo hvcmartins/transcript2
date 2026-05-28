@@ -509,7 +509,13 @@ async function loadTranscription(id) {
           }
           bodyHtml = whtml || `<span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
         } else {
-          bodyHtml = `<span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
+          let segConf = '';
+          const lp = seg.avg_logprob ?? null;
+          if (lp != null) {
+            if (lp < -0.7) segConf = ' data-conf="low"';
+            else if (lp < -0.3) segConf = ' data-conf="mid"';
+          }
+          bodyHtml = `<span class="seg-text"${segConf}>${escapeHtml(seg.text.trim())}</span>`;
         }
 
         if (hasSpeakers && seg.speaker) {
@@ -677,6 +683,7 @@ let _confMode  = false;
 function _escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function _openFindReplace() {
+  if (!el.findReplaceBar || !el.findReplaceBtn || !el.frFind) return;
   el.findReplaceBar.hidden = false;
   el.findReplaceBtn.classList.add('active');
   el.frFind.focus();
@@ -685,6 +692,7 @@ function _openFindReplace() {
 }
 
 function _closeFindReplace() {
+  if (!el.findReplaceBar || !el.findReplaceBtn) return;
   el.findReplaceBar.hidden = true;
   el.findReplaceBtn.classList.remove('active');
   _frMatches = [];
@@ -793,7 +801,7 @@ function _frReplaceAll() {
 
 // Find & Replace event listeners
 el.findReplaceBtn?.addEventListener('click', () => {
-  if (el.findReplaceBar.hidden) _openFindReplace();
+  if (!el.findReplaceBar || el.findReplaceBar.hidden) _openFindReplace();
   else _closeFindReplace();
 });
 el.frClose?.addEventListener('click', _closeFindReplace);
@@ -827,6 +835,9 @@ el.confToggleBtn?.addEventListener('click', () => {
   el.segmentView.classList.toggle('conf-mode', _confMode);
   el.confToggleBtn.classList.toggle('conf-active', _confMode);
   el.confToggleBtn.title = _confMode ? 'Hide confidence highlighting' : 'Show confidence highlighting';
+  if (_confMode && !el.segmentView.querySelector('[data-conf]')) {
+    showToast('No confidence data — re-transcribe to get highlighting', 'info', 5000);
+  }
 });
 
 // ─── Player ───────────────────────────────────────────────────────────────────
@@ -1140,29 +1151,38 @@ function renderHistory(items, q = '') {
       nameEl.replaceWith(input);
       input.focus(); input.select();
 
+      let _renameCommitted = false;
+
       const commit = async () => {
+        if (_renameCommitted) return;
+        _renameCommitted = true;
         const newName = input.value.trim() || item.original_name;
         const restored = document.createElement('div');
         restored.className = 'history-name';
         restored.textContent = newName;
         input.replaceWith(restored);
         if (newName !== item.original_name) {
-          await fetch(`/api/transcriptions/${item.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ original_name: newName }),
-          });
-          item.original_name = newName;
-          const h = state.history.find(h => h.id === item.id);
-          if (h) h.original_name = newName;
-          showToast('Renamed', 'success');
+          try {
+            await fetch(`/api/transcriptions/${item.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ original_name: newName }),
+            });
+            item.original_name = newName;
+            const h = state.history.find(h => h.id === item.id);
+            if (h) h.original_name = newName;
+            showToast('Renamed', 'success');
+          } catch {
+            showToast('Rename failed', 'error');
+          }
         }
       };
 
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', ke => {
-        if (ke.key === 'Enter') { ke.preventDefault(); commit(); }
+        if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
         if (ke.key === 'Escape') {
+          _renameCommitted = true;
           const restored = document.createElement('div');
           restored.className = 'history-name';
           restored.textContent = item.original_name;
@@ -1328,6 +1348,11 @@ function updateUploadHint(src) {
     : 'MP3, MP4, WAV, M4A, WEBM, OGG, FLAC, MKV & more — long files split automatically';
 }
 
+function _syncUsageCard() {
+  const usageCard = document.getElementById('usageCard');
+  if (usageCard) usageCard.hidden = (getSource() === 'openvino');
+}
+
 function initSourceSelector() {
   el.sourceOptions.querySelectorAll('.source-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1338,10 +1363,10 @@ function initSourceSelector() {
       el.groqModelGroup.hidden = (src === 'openvino');
       el.ovModelGroup.hidden   = (src !== 'openvino');
       updateUploadHint(src);
-      const usageCard = document.getElementById('usageCard');
-      if (usageCard) usageCard.hidden = (src === 'openvino');
+      _syncUsageCard();
     });
   });
+  _syncUsageCard(); // sync on page load based on which button starts active
 }
 
 // ─── Metadata (models + languages) ───────────────────────────────────────────

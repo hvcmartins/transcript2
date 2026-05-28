@@ -399,15 +399,17 @@ def transcribe_file(
     for result, offset in results:
         for seg in result["segments"]:
             merged_segments.append({
-                "start": round(seg["start"] + offset, 3),
-                "end":   round(seg["end"]   + offset, 3),
-                "text":  seg["text"],
+                "start":       round(seg["start"] + offset, 3),
+                "end":         round(seg["end"]   + offset, 3),
+                "text":        seg["text"],
+                "avg_logprob": seg.get("avg_logprob"),
             })
         for w in result["words"]:
             merged_words.append({
-                "word":  w["word"],
-                "start": round(w["start"] + offset, 3),
-                "end":   round(w["end"]   + offset, 3),
+                "word":        w["word"],
+                "start":       round(w["start"] + offset, 3),
+                "end":         round(w["end"]   + offset, 3),
+                "probability": w.get("probability"),
             })
         total_duration = max(total_duration, offset + result["duration"])
 
