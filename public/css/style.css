@@ -591,6 +591,38 @@ body { display: flex; min-height: 100vh; }
 
 .seg-text { font-size: 15px; line-height: 1.75; color: var(--text); }
 
+/* ─── Edit mode ──────────────────────────────────────────────────────── */
+.seg-words[contenteditable="true"],
+.seg-text[contenteditable="true"] {
+  display: block;
+  outline: none;
+  background: rgba(59,130,246,.05);
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  caret-color: var(--accent2);
+  white-space: pre-wrap;
+}
+.seg-words[contenteditable="true"]:focus,
+.seg-text[contenteditable="true"]:focus {
+  background: rgba(59,130,246,.1);
+  box-shadow: 0 0 0 1px rgba(59,130,246,.35);
+}
+
+/* save-indicator dot in toolbar */
+.save-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent2);
+  display: inline-block;
+  margin-left: 4px;
+  animation: blink 1.2s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+/* edit toggle active state */
+#editToggleBtn.editing { color: var(--green); }
+
 /* ─── Bulk action bar ────────────────────────────────────────────────── */
 .bulk-bar {
   display: flex;

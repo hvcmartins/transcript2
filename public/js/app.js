@@ -11,14 +11,18 @@ function generateUUID() {
 const state = {
   currentView:            'upload',
   selectedFile:           null,
-  preprocessId:           null,      // set after upload_and_preprocess
-  audioDuration:          null,      // seconds; set when preprocess_done
+  preprocessId:           null,
+  audioDuration:          null,
   currentTranscriptionId: null,
+  currentData:            null,   // full loaded transcription object
   ws:                     null,
   sessionId:              generateUUID(),
   history:                [],
   pollTimer:              null,
   transcriptionStartTime: null,
+  editMode:               false,
+  saveTimer:              null,
+  savePending:            false,
 };
 
 // ─── Audio Player ─────────────────────────────────────────────────────────────
@@ -85,6 +89,9 @@ const el = {
   ucAudioNums:          $('ucAudioNums'),
   ucAudioFill:          $('ucAudioFill'),
   ucReset:              $('ucReset'),
+  editToggleBtn:        $('editToggleBtn'),
+  editIcon:             $('editIcon'),
+  saveIcon:             $('saveIcon'),
   transcriptPlayer:     $('transcriptPlayer'),
   playerPlayBtn:        $('playerPlayBtn'),
   playerPlayIcon:       $('playerPlayIcon'),
@@ -456,7 +463,7 @@ async function loadTranscription(id) {
 
     if (segments.length > 0) {
       let lastSpeaker = null;
-      let wi = 0; // word index cursor
+      let wi = 0;
 
       segments.forEach(seg => {
         const div = document.createElement('div');
@@ -465,11 +472,15 @@ async function loadTranscription(id) {
 
         let bodyHtml;
         if (hasWords) {
-          // collect words that belong to this segment
           let whtml = '';
+          let wordIdx = 0;
           while (wi < words.length && words[wi].start < seg.end - 0.05) {
             const w = words[wi++];
-            whtml += `<span class="word" data-s="${w.start}" data-e="${w.end}">${escapeHtml(w.word)}</span>`;
+            // Ensure a space precedes every word except the first in the segment
+            const text = (wordIdx > 0 && !w.word.startsWith(' ') && !w.word.startsWith('\n'))
+              ? ' ' + w.word : w.word;
+            whtml += `<span class="word" data-s="${w.start}" data-e="${w.end}">${escapeHtml(text)}</span>`;
+            wordIdx++;
           }
           bodyHtml = whtml || `<span class="seg-text">${escapeHtml(seg.text.trim())}</span>`;
         } else {
@@ -488,7 +499,6 @@ async function loadTranscription(id) {
         el.segmentView.appendChild(div);
       });
 
-      // Any leftover words appended to last segment (edge case)
       if (hasWords && wi < words.length) {
         const lastWords = el.segmentView.querySelector('.segment:last-child .seg-words');
         if (lastWords) {
@@ -516,15 +526,15 @@ async function loadTranscription(id) {
     player.wordSpans.forEach(sp => {
       sp.addEventListener('click', () => playerSeekTo(id, parseFloat(sp.dataset.s)));
     });
-
-    // Seek clicks on segment timestamps too
     el.segmentView.querySelectorAll('.seg-time[data-t]').forEach(sp => {
       sp.addEventListener('click', () => playerSeekTo(id, parseFloat(sp.dataset.t)));
       sp.style.cursor = 'pointer';
     });
 
     state.currentTranscriptionId = id;
-    // Show/hide the embedded player based on whether audio is loaded for this transcript
+    state.currentData            = data;
+    state.editMode               = false;  // always start in view mode
+    _syncEditBtn();
     el.transcriptPlayer.hidden = (player.txId !== id);
     showView('transcript');
     clearSelection();
@@ -537,6 +547,99 @@ async function loadTranscription(id) {
 function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ─── Edit mode ────────────────────────────────────────────────────────────────
+function _syncEditBtn() {
+  if (!el.editToggleBtn) return;
+  el.editIcon.hidden = state.editMode;
+  el.saveIcon.hidden = !state.editMode;
+  el.editToggleBtn.classList.toggle('editing', state.editMode);
+  el.editToggleBtn.title = state.editMode ? 'Save edits' : 'Edit transcript';
+}
+
+function enterEditMode() {
+  if (state.editMode) return;
+  state.editMode = true;
+  cancelAnimationFrame(player.rafId); // pause karaoke during editing
+
+  el.segmentView.querySelectorAll('.seg-words, .seg-text').forEach(container => {
+    // Replace inner spans with plain text so contenteditable is clean
+    container.textContent = container.innerText;
+    container.contentEditable = 'true';
+    container.spellcheck = true;
+    container.addEventListener('input', _onEditInput);
+  });
+
+  _syncEditBtn();
+}
+
+function exitEditMode() {
+  if (!state.editMode) return;
+  clearTimeout(state.saveTimer);
+  state.editMode = false;
+
+  // Collect edits and persist
+  const containers = [...el.segmentView.querySelectorAll('[contenteditable="true"]')];
+  containers.forEach(c => {
+    c.removeEventListener('input', _onEditInput);
+    c.removeAttribute('contenteditable');
+    c.removeAttribute('spellcheck');
+  });
+
+  _flushEdits(containers);
+  _syncEditBtn();
+  _removeSaveDot();
+}
+
+function _onEditInput() {
+  _showSaveDot();
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(() => {
+    const containers = [...el.segmentView.querySelectorAll('[contenteditable="true"]')];
+    _flushEdits(containers);
+  }, 1500);
+}
+
+async function _flushEdits(containers) {
+  if (!state.currentData || !state.currentTranscriptionId) return;
+
+  // Rebuild segments from edited text
+  const segs = (state.currentData.segments || []).map((seg, i) => {
+    const text = containers[i] ? containers[i].innerText.replace(/\n/g, ' ').trim() : seg.text;
+    return { ...seg, text };
+  });
+  const transcript = segs.map(s => s.text).join(' ');
+
+  // Optimistically update local state
+  state.currentData = { ...state.currentData, segments: segs, transcript };
+
+  try {
+    await fetch(`/api/transcriptions/${state.currentTranscriptionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transcript, segments: segs }),
+    });
+    _removeSaveDot();
+  } catch {
+    showToast('Failed to save edits', 'error');
+  }
+}
+
+function _showSaveDot() {
+  if (el.editToggleBtn.querySelector('.save-dot')) return;
+  const dot = document.createElement('span');
+  dot.className = 'save-dot';
+  el.editToggleBtn.appendChild(dot);
+}
+
+function _removeSaveDot() {
+  el.editToggleBtn.querySelector('.save-dot')?.remove();
+}
+
+el.editToggleBtn?.addEventListener('click', () => {
+  if (state.editMode) exitEditMode();
+  else enterEditMode();
+});
 
 // ─── Player ───────────────────────────────────────────────────────────────────
 let _prevVolume = 1; // remember volume before mute
@@ -727,7 +830,7 @@ el.exportMenu.querySelectorAll('.dropdown-item').forEach(item => {
 });
 
 el.copyBtn.addEventListener('click', async () => {
-  const texts = [...el.segmentView.querySelectorAll('.seg-text')].map(e => e.textContent).join('\n');
+  const texts = [...el.segmentView.querySelectorAll('.seg-words, .seg-text')].map(e => e.innerText.trim()).join('\n');
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(texts);
@@ -743,7 +846,7 @@ el.copyBtn.addEventListener('click', async () => {
 });
 
 // ─── Back Button ─────────────────────────────────────────────────────────────
-el.backBtn.addEventListener('click', () => showView('upload'));
+el.backBtn.addEventListener('click', () => { exitEditMode(); showView('upload'); });
 
 // ─── History ─────────────────────────────────────────────────────────────────
 async function refreshHistory() {

@@ -72,6 +72,22 @@ async def get_one(id: str):
     return item
 
 
+# ── Edit transcript text ──────────────────────────────────────────────────────
+@router.patch("/{id}")
+async def edit_transcript(id: str, body: dict):
+    if not get_transcription(id):
+        raise HTTPException(status_code=404, detail="Not found")
+    fields: dict = {}
+    if "transcript" in body:
+        fields["transcript"] = str(body["transcript"])
+    if "segments" in body:
+        fields["segments"] = json.dumps(body["segments"])
+    if not fields:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    update_transcription(id, fields)
+    return {"ok": True}
+
+
 # ── Phase 1: Upload + preprocess (returns preprocess_id immediately) ──────────
 @router.post("/preprocess", status_code=202)
 async def upload_and_preprocess(
