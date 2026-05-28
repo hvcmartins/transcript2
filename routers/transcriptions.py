@@ -146,8 +146,21 @@ async def _run_transcription(
 
     try:
         # ── Step 1: preprocess (noise reduction + speech enhance → 16 kHz mono MP3) ──
-        await _send(10, extra={"label": "Preprocessing audio…"})
-        processed_path, is_temp = await asyncio.to_thread(preprocess_audio, file_path)
+        await _send(10, extra={"label": "Preprocessing audio…", "phase": "preprocess", "phase_pct": 0})
+        loop = asyncio.get_event_loop()
+
+        def _preprocess_cb(pct: int):
+            overall = 10 + int(pct * 20 / 100)   # map 0-100% → 10-30% overall
+            asyncio.run_coroutine_threadsafe(
+                _send(overall, extra={
+                    "label": "Preprocessing audio…",
+                    "phase": "preprocess",
+                    "phase_pct": pct,
+                }),
+                loop,
+            )
+
+        processed_path, is_temp = await asyncio.to_thread(preprocess_audio, file_path, _preprocess_cb)
 
         # Replace the original upload with the compressed version to save space
         if is_temp and processed_path:

@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -66,43 +67,96 @@ def get_last_usage() -> dict:
 
 
 # ── Audio preprocessing ───────────────────────────────────────────────────────
-def preprocess_audio(file_path: str) -> tuple[str, bool]:
+def _get_audio_duration(file_path: str) -> float | None:
+    """Use ffprobe to get audio duration in seconds."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", file_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        val = r.stdout.strip()
+        return float(val) if val else None
+    except Exception:
+        return None
+
+
+def _read_ffmpeg_progress(prog_path: str, duration_s: float) -> int | None:
+    """Parse ffmpeg -progress file to get 0-99 percentage."""
+    try:
+        with open(prog_path) as f:
+            content = f.read()
+        for line in reversed(content.splitlines()):
+            if line.startswith("out_time_ms="):
+                val = line.split("=", 1)[1].strip()
+                if val and val != "N/A":
+                    ms = int(val)
+                    if ms >= 0 and duration_s > 0:
+                        return min(99, int(ms / 1000 / duration_s * 100))
+    except Exception:
+        pass
+    return None
+
+
+def preprocess_audio(file_path: str, progress_cb=None) -> tuple[str, bool]:
     """
     Convert any audio/video to 16 kHz mono MP3 at 32 kbps using ffmpeg.
     Applies background noise reduction (afftdn) and speech enhancement (highpass + loudnorm).
+    Only the compressed output is kept — the original is deleted by the caller.
 
+    progress_cb(pct: int) is called with 0-100 during conversion when provided.
     Returns (processed_path, is_temp).
     Caller must os.unlink(processed_path) when is_temp=True.
     Falls back to the original file if ffmpeg is unavailable or fails.
     """
     try:
         tmp = tempfile.mktemp(suffix=".mp3")
-        result = subprocess.run(
-            [
-                "ffmpeg", "-i", file_path,
-                "-vn",                              # strip video
-                "-af", "highpass=f=80,afftdn=nf=-25,loudnorm",  # noise reduction + speech enhance
-                "-ar", "16000",                     # 16 kHz — optimal for Whisper
-                "-ac", "1",                         # mono
-                "-b:a", PREPROCESS_BITRATE,
-                "-y", tmp,
-            ],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            return file_path, False       # ffmpeg failed → use original
+        prog_path = tempfile.mktemp(suffix=".txt") if progress_cb else None
+
+        cmd = [
+            "ffmpeg", "-i", file_path,
+            "-vn",
+            "-af", "highpass=f=80,afftdn=nf=-25,loudnorm",
+            "-ar", "16000",
+            "-ac", "1",
+            "-b:a", PREPROCESS_BITRATE,
+        ]
+        if prog_path:
+            cmd += ["-progress", prog_path]
+        cmd += ["-y", tmp]
+
+        if progress_cb:
+            duration_s = _get_audio_duration(file_path)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            while proc.poll() is None:
+                if duration_s and prog_path:
+                    pct = _read_ffmpeg_progress(prog_path, duration_s)
+                    if pct is not None:
+                        progress_cb(pct)
+                time.sleep(0.4)
+            if prog_path:
+                Path(prog_path).unlink(missing_ok=True)
+            returncode = proc.returncode
+            if returncode == 0:
+                progress_cb(100)
+        else:
+            result = subprocess.run(cmd, capture_output=True)
+            returncode = result.returncode
+
+        if returncode != 0:
+            return file_path, False
 
         orig_size = Path(file_path).stat().st_size
         proc_size = Path(tmp).stat().st_size
 
         if proc_size == 0 or proc_size >= orig_size:
             os.unlink(tmp)
-            return file_path, False       # original already optimal
+            return file_path, False
 
         return tmp, True
 
     except (FileNotFoundError, OSError):
-        return file_path, False           # ffmpeg not installed
+        return file_path, False
 
 
 # ── Transcription ─────────────────────────────────────────────────────────────

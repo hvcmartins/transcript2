@@ -45,6 +45,10 @@ const el = {
   progressBar:       $('progressBar'),
   progressFilename:  $('progressFilename'),
   progressEta:       $('progressEta'),
+  phaseSection:      $('phaseSection'),
+  phaseLabel:        $('phaseLabel'),
+  phaseBar:          $('phaseBar'),
+  phasePct:          $('phasePct'),
   backBtn:           $('backBtn'),
   metaFilename:      $('metaFilename'),
   metaDuration:      $('metaDuration'),
@@ -55,6 +59,10 @@ const el = {
   segmentView:       $('segmentView'),
   historyList:       $('historyList'),
   historyEmpty:      $('historyEmpty'),
+  bulkBar:           $('bulkBar'),
+  bulkCount:         $('bulkCount'),
+  bulkDeleteBtn:     $('bulkDeleteBtn'),
+  selectAllCheck:    $('selectAllCheck'),
   apiStatus:         $('apiStatus'),
   toastContainer:    $('toastContainer'),
   usageEmpty:        $('usageEmpty'),
@@ -105,14 +113,15 @@ function handleWsMessage(msg) {
   if (msg.id && msg.id !== state.currentTranscriptionId) return;
 
   if (msg.type === 'progress') {
-    updateProgress(msg.progress, msg.label || 'Transcribing…');
+    updateProgress(msg.progress, msg.label || 'Transcribing…', msg.phase, msg.phase_pct);
   } else if (msg.type === 'complete') {
     stopPolling();
-    updateProgress(100, 'Done!');
+    updateProgress(100, 'Done!', null, null);
     setTimeout(() => {
       state.transcriptionStartTime = null;
       el.progressPanel.hidden = true;
       el.progressEta.textContent = '';
+      el.phaseSection.hidden = true;
       showToast('Transcription complete!', 'success');
       loadTranscription(msg.id);
     }, 600);
@@ -123,6 +132,7 @@ function handleWsMessage(msg) {
     state.transcriptionStartTime = null;
     el.progressPanel.hidden = true;
     el.progressEta.textContent = '';
+    el.phaseSection.hidden = true;
     el.optionsPanel.hidden = false;
     showToast(`Error: ${msg.error}`, 'error', 8000);
     refreshHistory();
@@ -139,14 +149,15 @@ function startPolling(id) {
       const data = await res.json();
 
       if (data.status === 'processing') {
-        updateProgress(data.progress || 30, 'Transcribing…');
+        updateProgress(data.progress || 30, 'Transcribing…', null, null);
       } else if (data.status === 'completed') {
         stopPolling();
-        updateProgress(100, 'Done!');
+        updateProgress(100, 'Done!', null, null);
         setTimeout(() => {
           state.transcriptionStartTime = null;
           el.progressPanel.hidden = true;
           el.progressEta.textContent = '';
+          el.phaseSection.hidden = true;
           showToast('Transcription complete!', 'success');
           loadTranscription(id);
         }, 600);
@@ -157,6 +168,7 @@ function startPolling(id) {
         state.transcriptionStartTime = null;
         el.progressPanel.hidden = true;
         el.progressEta.textContent = '';
+        el.phaseSection.hidden = true;
         el.optionsPanel.hidden = false;
         showToast(`Error: ${data.error_msg || 'Transcription failed'}`, 'error', 8000);
         refreshHistory();
@@ -274,8 +286,9 @@ el.transcribeBtn.addEventListener('click', async () => {
   el.progressPanel.hidden = false;
   el.progressFilename.textContent = state.selectedFile.name;
   el.progressEta.textContent = '';
+  el.phaseSection.hidden = true;
   state.transcriptionStartTime = Date.now();
-  updateProgress(2, 'Uploading…');
+  updateProgress(2, 'Uploading…', null, null);
 
   try {
     const res = await fetch('/api/transcriptions', { method: 'POST', body: formData });
@@ -310,16 +323,26 @@ el.transcribeBtn.addEventListener('click', async () => {
   }
 });
 
-// ─── Progress + ETA ───────────────────────────────────────────────────────────
-function updateProgress(pct, label) {
+// ─── Progress + Phase bar + ETA ───────────────────────────────────────────────
+function updateProgress(pct, label, phase, phasePct) {
   el.progressBar.style.width = pct + '%';
   if (label) el.progressLabel.textContent = label;
 
-  // ETA: only show during active processing (not upload or done)
-  if (state.transcriptionStartTime && pct > 20 && pct < 95) {
+  // Phase bar: visible only during preprocessing
+  if (phase === 'preprocess' && phasePct != null) {
+    el.phaseSection.hidden = false;
+    el.phaseBar.style.width = phasePct + '%';
+    el.phasePct.textContent = phasePct + '%';
+    el.phaseLabel.textContent = 'Preprocessing';
+  } else if (phase == null || phase !== 'preprocess') {
+    el.phaseSection.hidden = true;
+  }
+
+  // ETA: only during active transcription (not upload/preprocessing/done)
+  if (state.transcriptionStartTime && pct > 30 && pct < 95) {
     const elapsed = (Date.now() - state.transcriptionStartTime) / 1000;
     if (elapsed > 4) {
-      const rate = pct / elapsed;          // % per second
+      const rate = pct / elapsed;
       const remaining = Math.ceil((100 - pct) / rate);
       if (remaining > 3) {
         const m = Math.floor(remaining / 60);
@@ -445,8 +468,30 @@ async function refreshHistory() {
   } catch (_) {}
 }
 
+function getSelectedIds() {
+  return [...el.historyList.querySelectorAll('.history-check:checked')].map(cb => cb.dataset.id);
+}
+
+function updateBulkBar() {
+  const checks = [...el.historyList.querySelectorAll('.history-check')];
+  const selected = checks.filter(c => c.checked);
+  const count = selected.length;
+
+  el.bulkBar.hidden = count === 0;
+  el.bulkCount.textContent = `${count} selected`;
+  el.selectAllCheck.checked = count > 0 && count === checks.length;
+  el.selectAllCheck.indeterminate = count > 0 && count < checks.length;
+
+  // Highlight selected rows
+  el.historyList.querySelectorAll('.history-item').forEach(row => {
+    const cb = row.querySelector('.history-check');
+    row.classList.toggle('selected', cb?.checked ?? false);
+  });
+}
+
 function renderHistory(items) {
   el.historyList.innerHTML = '';
+  el.bulkBar.hidden = true;
 
   if (!items.length) {
     el.historyList.appendChild(el.historyEmpty);
@@ -458,6 +503,9 @@ function renderHistory(items) {
     const div = document.createElement('div');
     div.className = 'history-item';
     div.innerHTML = `
+      <label class="history-check-wrap" title="Select">
+        <input type="checkbox" class="history-check" data-id="${item.id}">
+      </label>
       <div class="history-icon">${getFileIcon(item.original_name)}</div>
       <div class="history-info">
         <div class="history-name">${escapeHtml(item.original_name)}</div>
@@ -470,6 +518,8 @@ function renderHistory(items) {
       <span class="history-badge badge-${item.status}">${item.status}</span>
       <button class="history-delete" data-id="${item.id}" title="Delete">🗑</button>
     `;
+
+    div.querySelector('.history-check').addEventListener('change', updateBulkBar);
 
     if (item.status === 'completed') {
       div.querySelector('.history-info').addEventListener('click', () => loadTranscription(item.id));
@@ -487,6 +537,24 @@ function renderHistory(items) {
     el.historyList.appendChild(div);
   });
 }
+
+// Bulk delete
+el.bulkDeleteBtn.addEventListener('click', async () => {
+  const ids = getSelectedIds();
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} transcription${ids.length > 1 ? 's' : ''}?`)) return;
+  await Promise.all(ids.map(id => fetch(`/api/transcriptions/${id}`, { method: 'DELETE' })));
+  showToast(`Deleted ${ids.length} transcription${ids.length > 1 ? 's' : ''}`, 'info');
+  refreshHistory();
+});
+
+// Select all / deselect all
+el.selectAllCheck.addEventListener('change', () => {
+  el.historyList.querySelectorAll('.history-check').forEach(cb => {
+    cb.checked = el.selectAllCheck.checked;
+  });
+  updateBulkBar();
+});
 
 // ─── Groq API Usage Bar ───────────────────────────────────────────────────────
 function _usageFillClass(pct) {

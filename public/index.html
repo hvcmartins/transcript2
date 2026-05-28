@@ -124,9 +124,23 @@
           <span class="spinner"></span>
           <span id="progressLabel">Uploading…</span>
         </div>
-        <div class="progress-bar-wrap">
+
+        <!-- Phase detail bar (visible only during preprocessing) -->
+        <div id="phaseSection" hidden>
+          <div class="phase-header">
+            <span class="phase-label" id="phaseLabel">Preprocessing</span>
+            <span class="phase-pct" id="phasePct">0%</span>
+          </div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar phase-bar" id="phaseBar" style="width:0%"></div>
+          </div>
+        </div>
+
+        <!-- Overall progress bar -->
+        <div class="progress-bar-wrap overall-bar-wrap">
           <div class="progress-bar" id="progressBar" style="width:0%"></div>
         </div>
+
         <div class="progress-footer">
           <p id="progressFilename" class="progress-filename"></p>
           <p id="progressEta" class="progress-eta"></p>
@@ -229,6 +243,19 @@
       <div class="view-header">
         <h2>Transcription History</h2>
         <p>All your previous transcriptions stored locally</p>
+      </div>
+
+      <!-- Bulk action bar — appears when items are selected -->
+      <div class="bulk-bar" id="bulkBar" hidden>
+        <label class="bulk-select-all">
+          <input type="checkbox" id="selectAllCheck">
+          <span>Select all</span>
+        </label>
+        <span class="bulk-count" id="bulkCount">0 selected</span>
+        <button class="btn-danger" id="bulkDeleteBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+          Delete selected
+        </button>
       </div>
 
       <div class="history-list" id="historyList">
