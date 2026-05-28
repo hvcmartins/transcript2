@@ -101,31 +101,15 @@ def _read_ffmpeg_progress(prog_path: str, duration_s: float) -> int | None:
 def preprocess_audio(file_path: str, progress_cb=None) -> tuple[str, bool]:
     """
     Convert any audio/video to 16 kHz mono MP3 at 32 kbps using ffmpeg.
-    Applies background noise reduction (afftdn) and speech enhancement (highpass + loudnorm).
-    Only the compressed output is kept — the original is deleted by the caller.
+    Tries with noise-reduction filters first; falls back to plain conversion if filters fail.
+    Always returns a properly formatted 16 kHz mono MP3 (never the raw original).
 
     progress_cb(pct: int) is called with 0-100 during conversion when provided.
-    Returns (processed_path, is_temp).
-    Caller must os.unlink(processed_path) when is_temp=True.
-    Falls back to the original file if ffmpeg is unavailable or fails.
+    Returns (processed_path, is_temp).  is_temp is always True on success.
+    Raises RuntimeError if ffmpeg is unavailable or both attempts fail.
     """
-    try:
-        tmp = tempfile.mktemp(suffix=".mp3")
-        prog_path = tempfile.mktemp(suffix=".txt") if progress_cb else None
-
-        cmd = [
-            "ffmpeg", "-i", file_path,
-            "-vn",
-            "-af", "highpass=f=80,afftdn=nf=-25,loudnorm",
-            "-ar", "16000",
-            "-ac", "1",
-            "-b:a", PREPROCESS_BITRATE,
-        ]
-        if prog_path:
-            cmd += ["-progress", prog_path]
-        cmd += ["-y", tmp]
-
-        if progress_cb:
+    def _run_cmd(cmd: list[str], use_progress: bool) -> int:
+        if use_progress and progress_cb:
             duration_s = get_audio_duration(file_path)
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             while proc.poll() is None:
@@ -134,29 +118,48 @@ def preprocess_audio(file_path: str, progress_cb=None) -> tuple[str, bool]:
                     if pct is not None:
                         progress_cb(pct)
                 time.sleep(0.4)
-            if prog_path:
-                Path(prog_path).unlink(missing_ok=True)
-            returncode = proc.returncode
-            if returncode == 0:
-                progress_cb(100)
+            return proc.returncode
         else:
-            result = subprocess.run(cmd, capture_output=True)
-            returncode = result.returncode
+            return subprocess.run(cmd, capture_output=True).returncode
+
+    tmp = tempfile.mktemp(suffix=".mp3")
+    prog_path = tempfile.mktemp(suffix=".txt") if progress_cb else None
+
+    def _build_cmd(filters: list[str]) -> list[str]:
+        cmd = ["ffmpeg", "-i", file_path, "-vn"]
+        if filters:
+            cmd += ["-af", ",".join(filters)]
+        cmd += ["-ar", "16000", "-ac", "1", "-b:a", PREPROCESS_BITRATE]
+        if prog_path:
+            cmd += ["-progress", prog_path]
+        cmd += ["-y", tmp]
+        return cmd
+
+    try:
+        # Attempt 1: with noise-reduction filters
+        returncode = _run_cmd(_build_cmd(["highpass=f=80", "afftdn=nf=-25"]), use_progress=True)
 
         if returncode != 0:
-            return file_path, False
+            # Attempt 2: plain conversion without filters (handles edge-case audio formats)
+            if prog_path:
+                Path(prog_path).unlink(missing_ok=True)
+            returncode = _run_cmd(_build_cmd([]), use_progress=True)
 
-        orig_size = Path(file_path).stat().st_size
-        proc_size = Path(tmp).stat().st_size
+        if prog_path:
+            Path(prog_path).unlink(missing_ok=True)
 
-        if proc_size == 0 or proc_size >= orig_size:
-            os.unlink(tmp)
-            return file_path, False
+        if returncode != 0 or not Path(tmp).exists() or Path(tmp).stat().st_size == 0:
+            Path(tmp).unlink(missing_ok=True)
+            raise RuntimeError("ffmpeg failed to convert audio")
+
+        if progress_cb:
+            progress_cb(100)
 
         return tmp, True
 
-    except (FileNotFoundError, OSError):
-        return file_path, False
+    except (FileNotFoundError, OSError) as exc:
+        Path(tmp).unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg not available: {exc}") from exc
 
 
 # ── Transcription ─────────────────────────────────────────────────────────────

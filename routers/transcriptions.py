@@ -134,23 +134,21 @@ async def _run_preprocess(
     try:
         processed_path, is_temp = await asyncio.to_thread(preprocess_audio, raw_path, _cb)
 
-        # Move compressed file to permanent location; delete raw upload
+        # Move compressed file to permanent location; always delete raw upload
         perm_path = str(UPLOAD_DIR / f"{preprocess_id}.mp3")
-        if is_temp and processed_path:
-            shutil.move(processed_path, perm_path)
-            if os.path.realpath(raw_path) != os.path.realpath(perm_path):
-                Path(raw_path).unlink(missing_ok=True)
-        else:
-            if os.path.realpath(raw_path) != os.path.realpath(perm_path):
-                shutil.move(raw_path, perm_path)
+        shutil.move(processed_path, perm_path)
+        if os.path.realpath(raw_path) != os.path.realpath(perm_path):
+            Path(raw_path).unlink(missing_ok=True)
 
+        compressed_size = Path(perm_path).stat().st_size
         duration_s = await asyncio.to_thread(get_audio_duration, perm_path)
 
         sidecar = UPLOAD_DIR / f"{preprocess_id}.json"
         sidecar.write_text(json.dumps({
-            "original_name": original_name,
-            "original_size": original_size,
-            "duration_s":    duration_s,
+            "original_name":   original_name,
+            "original_size":   original_size,
+            "compressed_size": compressed_size,
+            "duration_s":      duration_s,
         }))
 
         await manager.broadcast(preprocess_id, {
@@ -165,6 +163,7 @@ async def _run_preprocess(
         print(f"Preprocess error [{preprocess_id}]: {exc}\n{traceback.format_exc()}")
         Path(raw_path).unlink(missing_ok=True)
         Path(UPLOAD_DIR / f"{preprocess_id}.mp3").unlink(missing_ok=True)
+        Path(UPLOAD_DIR / f"{preprocess_id}.json").unlink(missing_ok=True)
         await manager.broadcast(preprocess_id, {
             "type":          "preprocess_error",
             "preprocess_id": preprocess_id,
@@ -202,7 +201,7 @@ async def create(
         "id":            record_id,
         "filename":      tx_filename,
         "original_name": meta["original_name"],
-        "file_size":     meta["original_size"],
+        "file_size":     meta.get("compressed_size") or meta["original_size"],
         "language":      language,
         "model":         model,
     })
