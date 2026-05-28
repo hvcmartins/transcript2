@@ -488,6 +488,7 @@ async function loadTranscription(id) {
         if (hasWords) {
           let whtml = '';
           let wordIdx = 0;
+          const segLogp = seg.avg_logprob ?? null; // fallback when Groq omits per-word probability
           while (wi < words.length && words[wi].start < seg.end - 0.05) {
             const w = words[wi++];
             // Ensure a space precedes every word except the first in the segment
@@ -495,8 +496,13 @@ async function loadTranscription(id) {
               ? ' ' + w.word : w.word;
             let confAttr = '';
             if (w.probability != null) {
+              // Per-word probability 0–1 (Groq may not supply this)
               if (w.probability < 0.65) confAttr = ' data-conf="low"';
               else if (w.probability < 0.85) confAttr = ' data-conf="mid"';
+            } else if (segLogp != null) {
+              // Segment avg_logprob (negative; less negative = more confident)
+              if (segLogp < -0.7) confAttr = ' data-conf="low"';
+              else if (segLogp < -0.3) confAttr = ' data-conf="mid"';
             }
             whtml += `<span class="word" data-s="${w.start}" data-e="${w.end}"${confAttr}>${escapeHtml(text)}</span>`;
             wordIdx++;
@@ -720,11 +726,33 @@ function _frUpdateCount() {
 function _frScrollToCurrent() {
   if (_frCurrent < 0 || !_frMatches.length) return;
   const containers = _frContainers();
-  const c = containers[_frMatches[_frCurrent].ci];
+  const { ci, idx } = _frMatches[_frCurrent];
+  const c = containers[ci];
   if (!c) return;
   c.scrollIntoView({ behavior: 'smooth', block: 'center' });
   c.classList.add('fr-highlight');
-  setTimeout(() => c.classList.remove('fr-highlight'), 700);
+  setTimeout(() => c.classList.remove('fr-highlight'), 1500);
+
+  // Select the matched text so the user can see exactly which word matched
+  try {
+    const q = el.frFind.value;
+    const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT, null);
+    let offset = 0, node = walker.nextNode();
+    while (node) {
+      const len = node.textContent.length;
+      if (offset + len > idx) {
+        const range = document.createRange();
+        range.setStart(node, idx - offset);
+        range.setEnd(node, Math.min(idx - offset + q.length, len));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        break;
+      }
+      offset += len;
+      node = walker.nextNode();
+    }
+  } catch (_) {}
 }
 
 function _frNav(dir) {
@@ -1310,6 +1338,8 @@ function initSourceSelector() {
       el.groqModelGroup.hidden = (src === 'openvino');
       el.ovModelGroup.hidden   = (src !== 'openvino');
       updateUploadHint(src);
+      const usageCard = document.getElementById('usageCard');
+      if (usageCard) usageCard.hidden = (src === 'openvino');
     });
   });
 }

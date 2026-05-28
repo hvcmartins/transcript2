@@ -1099,7 +1099,7 @@ body { display: flex; min-height: 100vh; }
 /* ─── History name row (rename) ──────────────────────────────────────── */
 .history-name-row { display: flex; align-items: center; gap: 6px; }
 .hist-rename {
-  opacity: 0;
+  opacity: 0.35;
   background: none;
   border: none;
   color: var(--text3);
@@ -1225,7 +1225,7 @@ body { display: flex; min-height: 100vh; }
   margin-left: auto;
 }
 .fr-close:hover { background: var(--bg2); color: var(--text); }
-.fr-highlight { outline: 2px solid var(--accent) !important; outline-offset: 2px; }
+.fr-highlight { outline: 2px solid var(--accent) !important; outline-offset: 3px; background: rgba(59,130,246,.08) !important; border-radius: 4px; }
 
 /* ─── Confidence highlighting ────────────────────────────────────────── */
 #confToggleBtn.conf-active { color: var(--yellow); border-color: rgba(245,158,11,.4); }
