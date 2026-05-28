@@ -85,17 +85,18 @@ const el = {
   ucAudioNums:          $('ucAudioNums'),
   ucAudioFill:          $('ucAudioFill'),
   ucReset:              $('ucReset'),
-  transcriptPlayBtn:    $('transcriptPlayBtn'),
-  tPlayIcon:            $('tPlayIcon'),
-  tPauseIcon:           $('tPauseIcon'),
-  playerBar:            $('playerBar'),
+  transcriptPlayer:     $('transcriptPlayer'),
   playerPlayBtn:        $('playerPlayBtn'),
   playerPlayIcon:       $('playerPlayIcon'),
   playerPauseIcon:      $('playerPauseIcon'),
-  playerFilename:       $('playerFilename'),
   playerCurrent:        $('playerCurrent'),
   playerTotal:          $('playerTotal'),
   playerSeek:           $('playerSeek'),
+  playerMuteBtn:        $('playerMuteBtn'),
+  playerVolume:         $('playerVolume'),
+  volIconHigh:          $('volIconHigh'),
+  volIconLow:           $('volIconLow'),
+  volIconMute:          $('volIconMute'),
   playerCloseBtn:       $('playerCloseBtn'),
 };
 
@@ -523,7 +524,8 @@ async function loadTranscription(id) {
     });
 
     state.currentTranscriptionId = id;
-    _syncTranscriptPlayBtn();
+    // Show/hide the embedded player based on whether audio is loaded for this transcript
+    el.transcriptPlayer.hidden = (player.txId !== id);
     showView('transcript');
     clearSelection();
     el.progressPanel.hidden = true;
@@ -537,59 +539,64 @@ function escapeHtml(str) {
 }
 
 // ─── Player ───────────────────────────────────────────────────────────────────
-function playerLoad(txId, originalName) {
-  if (player.txId === txId) return; // already loaded
+let _prevVolume = 1; // remember volume before mute
+
+function playerLoad(txId) {
+  if (player.txId === txId) return; // already loaded — keep existing state
   player.txId = txId;
   player.audio.src = `/api/transcriptions/${txId}/audio`;
   player.audio.load();
-  el.playerFilename.textContent = originalName;
-  el.playerTotal.textContent    = '…';
-  el.playerCurrent.textContent  = '0:00';
-  el.playerSeek.value           = 0;
+  el.playerTotal.textContent   = '…';
+  el.playerCurrent.textContent = '0:00';
+  el.playerSeek.value          = 0;
+  el.transcriptPlayer.hidden   = false;
 }
 
+// Seek to time t in transcript txId; if not loaded yet, wait for canplay
 function playerSeekTo(txId, t) {
-  const originalName = el.metaFilename.textContent || '';
   if (player.txId !== txId) {
-    playerLoad(txId, originalName);
-    const onReady = () => {
+    playerLoad(txId);
+    player.audio.addEventListener('canplay', function onReady() {
       player.audio.removeEventListener('canplay', onReady);
       player.audio.currentTime = t;
       player.audio.play();
-    };
-    player.audio.addEventListener('canplay', onReady);
+    });
   } else {
     player.audio.currentTime = t;
     player.audio.play();
   }
 }
 
-function playerToggle(txId, originalName) {
-  playerLoad(txId, originalName);
+function playerToggle(txId) {
+  playerLoad(txId);
   if (player.audio.paused) player.audio.play();
   else player.audio.pause();
 }
 
 function playerClose() {
   player.audio.pause();
-  player.audio.src   = '';
-  player.txId        = null;
-  player.wordSpans   = [];
-  player.activeSpan  = null;
+  player.audio.src  = '';
+  player.txId       = null;
+  player.wordSpans  = [];
+  player.activeSpan = null;
   cancelAnimationFrame(player.rafId);
-  el.playerBar.hidden = true;
-  document.body.classList.remove('player-on');
-  _syncTranscriptPlayBtn();
+  el.transcriptPlayer.hidden = true;
   _syncHistoryPlayBtns();
 }
 
 // Karaoke: advance highlight every animation frame while playing
 function _karaokeFrame() {
   if (player.audio.paused) return;
+
+  // Lazily refresh spans if the current transcript is showing but spans not yet cached
+  if (player.wordSpans.length === 0 && player.txId === state.currentTranscriptionId) {
+    player.wordSpans = Array.from(el.segmentView.querySelectorAll('.word[data-s]'));
+  }
+
   const t     = player.audio.currentTime;
   const spans = player.wordSpans;
 
-  // Binary search: last span whose start ≤ t
+  // Binary search: last span whose start ≤ t  (highlights the word being spoken)
   let lo = 0, hi = spans.length - 1, found = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
@@ -602,18 +609,18 @@ function _karaokeFrame() {
     player.activeSpan?.classList.remove('k-on');
     next?.classList.add('k-on');
     player.activeSpan = next;
-    if (next && state.currentView === 'transcript' && player.txId === state.currentTranscriptionId) {
+    if (next && player.txId === state.currentTranscriptionId) {
       next.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
   }
   player.rafId = requestAnimationFrame(_karaokeFrame);
 }
 
-function _syncTranscriptPlayBtn() {
-  if (!el.transcriptPlayBtn) return;
-  const isPlaying = !player.audio.paused && player.txId === state.currentTranscriptionId;
-  el.tPlayIcon.hidden  = isPlaying;
-  el.tPauseIcon.hidden = !isPlaying;
+function _updateVolIcon() {
+  const v = player.audio.muted ? 0 : player.audio.volume;
+  el.volIconHigh.hidden = !(v > 0.4);
+  el.volIconLow.hidden  = !(v > 0 && v <= 0.4);
+  el.volIconMute.hidden = !(v === 0 || player.audio.muted);
 }
 
 function _syncHistoryPlayBtns() {
@@ -625,15 +632,14 @@ function _syncHistoryPlayBtns() {
   });
 }
 
-// Wire up player audio element events once
+// ── Audio element events ──────────────────────────────────────────────────────
 player.audio.addEventListener('play', () => {
-  el.playerBar.hidden = false;
-  document.body.classList.add('player-on');
-  el.playerPlayIcon.hidden  = true;
-  el.playerPauseIcon.hidden = false;
+  el.transcriptPlayer.hidden = false;
+  el.playerPlayIcon.hidden   = true;
+  el.playerPauseIcon.hidden  = false;
   el.playerPlayBtn.classList.remove('paused');
-  _syncTranscriptPlayBtn();
   _syncHistoryPlayBtns();
+  cancelAnimationFrame(player.rafId);
   player.rafId = requestAnimationFrame(_karaokeFrame);
 });
 
@@ -641,7 +647,6 @@ player.audio.addEventListener('pause', () => {
   el.playerPlayIcon.hidden  = false;
   el.playerPauseIcon.hidden = true;
   el.playerPlayBtn.classList.add('paused');
-  _syncTranscriptPlayBtn();
   _syncHistoryPlayBtns();
   cancelAnimationFrame(player.rafId);
 });
@@ -650,11 +655,11 @@ player.audio.addEventListener('ended', () => {
   player.audio.currentTime  = 0;
   el.playerPlayIcon.hidden  = false;
   el.playerPauseIcon.hidden = true;
+  el.playerPlayBtn.classList.add('paused');
   player.activeSpan?.classList.remove('k-on');
   player.activeSpan = null;
   el.playerSeek.value = 0;
   el.playerCurrent.textContent = secondsToMMSS(0);
-  _syncTranscriptPlayBtn();
   _syncHistoryPlayBtns();
 });
 
@@ -671,11 +676,11 @@ player.audio.addEventListener('durationchange', () => {
 });
 
 player.audio.addEventListener('error', () => {
-  showToast('Audio playback error', 'error');
+  showToast('Audio playback error — file may have been deleted', 'error');
   playerClose();
 });
 
-// Player bar controls
+// ── Player controls ───────────────────────────────────────────────────────────
 el.playerPlayBtn.addEventListener('click', () => {
   if (player.audio.paused) player.audio.play();
   else player.audio.pause();
@@ -688,11 +693,25 @@ el.playerSeek.addEventListener('input', () => {
   if (d > 0) player.audio.currentTime = parseFloat(el.playerSeek.value) * d;
 });
 
-// Transcript toolbar play button
-el.transcriptPlayBtn?.addEventListener('click', () => {
-  const id = state.currentTranscriptionId;
-  if (!id) return;
-  playerToggle(id, el.metaFilename.textContent || '');
+el.playerVolume.addEventListener('input', () => {
+  const v = parseFloat(el.playerVolume.value);
+  player.audio.volume = v;
+  player.audio.muted  = (v === 0);
+  _prevVolume = v > 0 ? v : _prevVolume;
+  _updateVolIcon();
+});
+
+el.playerMuteBtn.addEventListener('click', () => {
+  if (player.audio.muted || player.audio.volume === 0) {
+    player.audio.muted  = false;
+    player.audio.volume = _prevVolume || 1;
+    el.playerVolume.value = player.audio.volume;
+  } else {
+    _prevVolume = player.audio.volume;
+    player.audio.muted = true;
+    el.playerVolume.value = 0;
+  }
+  _updateVolIcon();
 });
 
 // ─── Export ───────────────────────────────────────────────────────────────────
@@ -797,9 +816,17 @@ function renderHistory(items) {
 
       const hplay = div.querySelector('.hist-play');
       if (hplay) {
-        hplay.addEventListener('click', (e) => {
+        hplay.addEventListener('click', async (e) => {
           e.stopPropagation();
-          playerToggle(item.id, item.original_name);
+          if (player.txId === item.id) {
+            // Already loaded — just toggle without re-fetching transcript
+            playerToggle(item.id);
+          } else {
+            // Navigate to transcript (populates wordSpans), then play
+            await loadTranscription(item.id);
+            playerLoad(item.id);
+            player.audio.play();
+          }
         });
       }
     }
