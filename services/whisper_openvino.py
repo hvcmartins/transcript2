@@ -82,7 +82,76 @@ def _load(model_id: str):
 
 _TS_RE = re.compile(r"<\|[\d.]+\|>")
 
-_CHUNK   = 30 * 16000   # 30 s at 16 kHz
+_CHUNK = 30 * 16000   # 30 s at 16 kHz
+
+
+def _extract_seg_logprobs(output, tokenizer) -> list:
+    """
+    Walk the scored generate() output and return one avg_logprob per
+    timestamp-delimited segment (matching the order batch_decode returns).
+
+    Whisper token layout (after forced prefix):
+      <|t_start|> text_tok... <|t_end|> <|t_start|> text_tok... <|t_end|> ...
+
+    We average log-P(text tokens) within each pair and skip timestamp tokens.
+    Returns [] on any error so callers can fall back to avg_logprob=None.
+    """
+    import numpy as np
+
+    scores = getattr(output, "scores", None)
+    if not scores:
+        return []
+
+    try:
+        ts_begin = tokenizer.timestamp_begin
+    except AttributeError:
+        return []
+
+    # sequences[0]: full token ID list including forced prefix
+    seqs = output.sequences
+    token_ids = seqs[0].tolist() if hasattr(seqs[0], "tolist") else list(seqs[0])
+    num_forced = len(token_ids) - len(scores)
+    if num_forced < 0:
+        return []
+
+    # Compute log-prob of the chosen token at each generation step
+    token_logprobs: list[tuple[int, float]] = []
+    for step, (score_t, tok_id) in enumerate(zip(scores, token_ids[num_forced:])):
+        # score_t: (batch, vocab) — take batch 0
+        logits = score_t[0]
+        if hasattr(logits, "numpy"):
+            logits = logits.numpy()
+        elif hasattr(logits, "detach"):
+            logits = logits.detach().numpy()
+        else:
+            logits = np.asarray(logits)
+        logits = logits.astype(np.float64)
+        # numerically stable log-softmax
+        shifted = logits - logits.max()
+        lp = shifted[tok_id] - np.log(np.sum(np.exp(shifted)))
+        token_logprobs.append((tok_id, float(lp)))
+
+    # Walk pairs of timestamp tokens, average text-token log-probs per segment
+    seg_logprobs: list = []
+    i, n = 0, len(token_logprobs)
+    while i < n:
+        tok_id, _ = token_logprobs[i]
+        if tok_id >= ts_begin:
+            i += 1  # consume start-timestamp
+            text_lps: list[float] = []
+            while i < n:
+                tok_id2, lp2 = token_logprobs[i]
+                if tok_id2 >= ts_begin:
+                    i += 1  # consume end-timestamp
+                    break
+                text_lps.append(lp2)
+                i += 1
+            if text_lps:
+                seg_logprobs.append(float(np.mean(text_lps)))
+        else:
+            i += 1
+
+    return seg_logprobs
 
 
 def transcribe_openvino(
@@ -137,7 +206,15 @@ def transcribe_openvino(
             chunk, sampling_rate=16000, return_tensors="pt"
         ).input_features
 
-        ids = model.generate(input_features, **gen_kwargs)
+        # Try to get per-token scores for confidence extraction
+        scored_kwargs = {**gen_kwargs, "output_scores": True, "return_dict_in_generate": True}
+        try:
+            output = model.generate(input_features, **scored_kwargs)
+            ids = output.sequences
+            seg_logprobs = _extract_seg_logprobs(output, processor.tokenizer)
+        except Exception:
+            ids = model.generate(input_features, **gen_kwargs)
+            seg_logprobs = []
 
         # Decode with timestamp offsets
         decoded = processor.batch_decode(
@@ -148,16 +225,19 @@ def transcribe_openvino(
         )
         chunk_result = decoded[0] if decoded else {}
 
-        raw_text   = chunk_result.get("text") or ""
+        raw_text    = chunk_result.get("text") or ""
         raw_offsets = chunk_result.get("offsets") or []
 
+        lp_idx = 0
         for seg in raw_offsets:
             ts    = seg.get("offset") or (0.0, 0.0)
             start = float(ts[0] if ts[0] is not None else 0.0) + offset_s
             end   = float(ts[1] if ts[1] is not None else start) + offset_s
             text  = _TS_RE.sub("", seg.get("text") or "").strip()
             if text:
-                segments.append({"start": start, "end": end, "text": text})
+                avg_lp = seg_logprobs[lp_idx] if lp_idx < len(seg_logprobs) else None
+                lp_idx += 1
+                segments.append({"start": start, "end": end, "text": text, "avg_logprob": avg_lp})
 
         clean = _TS_RE.sub("", raw_text).strip()
         if clean:
@@ -170,7 +250,14 @@ def transcribe_openvino(
     full_text = " ".join(text_parts).strip()
 
     if not segments:
-        segments = [{"start": 0.0, "end": duration, "text": full_text}]
+        segments = [{"start": 0.0, "end": duration, "text": full_text, "avg_logprob": None}]
+
+    lp_vals = [s["avg_logprob"] for s in segments if s.get("avg_logprob") is not None]
+    print(
+        f"[openvino] segments={len(segments)}  avg_logprob present={len(lp_vals)}"
+        f"  sample={[round(v,3) for v in lp_vals[:3]] if lp_vals else 'none'}",
+        flush=True,
+    )
 
     return {
         "text":     full_text,
