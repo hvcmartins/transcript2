@@ -86,7 +86,10 @@
           <span class="file-icon">🎵</span>
           <div class="file-details">
             <span class="file-name" id="selectedFileName">No file</span>
-            <span class="file-duration" id="selectedFileDuration"></span>
+            <span class="file-meta">
+              <span class="file-duration" id="selectedFileDuration"></span>
+              <span class="file-size" id="selectedFileSize"></span>
+            </span>
           </div>
           <button class="icon-btn" id="clearFile" title="Remove file">✕</button>
         </div>
@@ -335,7 +338,7 @@
   <!-- Toast notifications -->
   <div id="toastContainer"></div>
 
-  <script src="/js/lame.all.js"></script>
+  <script src="/js/ffmpeg/ffmpeg.js"></script>
   <script type="module" src="/js/app.js"></script>
 </body>
 </html>

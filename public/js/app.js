@@ -47,6 +47,7 @@ const el = {
   optionsPanel:         $('optionsPanel'),
   selectedFileName:     $('selectedFileName'),
   selectedFileDuration: $('selectedFileDuration'),
+  selectedFileSize:     $('selectedFileSize'),
   clearFile:            $('clearFile'),
   languageSelect:       $('languageSelect'),
   modelSelect:          $('modelSelect'),
@@ -170,6 +171,7 @@ function handleWsMessage(msg) {
   if (msg.type === 'preprocess_done') {
     if (msg.preprocess_id !== state.preprocessId) return;
     state.audioDuration = msg.duration_s ?? null;
+    if (msg.compressed_size) state.processedSize = msg.compressed_size;
     _showOptionsAfterPreprocess(msg.duration_s);
     return;
   }
@@ -221,6 +223,8 @@ function _showOptionsAfterPreprocess(duration_s) {
   el.selectedFileDuration.textContent = duration_s
     ? '⏱ ' + secondsToHMMSS(duration_s)
     : '';
+  const sizeBytes = state.processedSize ?? state.selectedFile?.size ?? null;
+  el.selectedFileSize.textContent = sizeBytes ? formatBytes(sizeBytes) : '';
   el.optionsPanel.querySelector('.file-icon').textContent =
     getFileIcon(state.selectedFile?.name || '');
   if (el.customName) el.customName.value = state.selectedFile?.name || '';
@@ -302,9 +306,10 @@ function getFileIcon(name) {
 }
 
 function clearSelection() {
-  state.selectedFile  = null;
-  state.preprocessId  = null;
-  state.audioDuration = null;
+  state.selectedFile   = null;
+  state.preprocessId   = null;
+  state.audioDuration  = null;
+  state.processedSize  = null;
   el.dropZone.hidden      = false;
   el.optionsPanel.hidden  = true;
   el.progressPanel.hidden = true;
@@ -330,68 +335,59 @@ el.dropZone.addEventListener('drop', (e) => {
   if (file) handleFileSelected(file);
 });
 
-// Video containers: browser can't extract their audio track via decodeAudioData.
-// Large files: loading into RAM would crash the tab. Both go straight to server.
-const _VIDEO_EXTS    = new Set(['mp4','mkv','avi','mov','flv','wmv','3gp','mpeg','mpg','ts','m2ts']);
-const _MAX_ENCODE_MB = 500;
+// ─── Client-side ffmpeg preprocessing ────────────────────────────────────────
+let _ffmpegInst = null;
+let _ffmpegBusy = false;
 
-function _canEncodeInBrowser(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (_VIDEO_EXTS.has(ext)) return false;
-  if (file.size > _MAX_ENCODE_MB * 1024 * 1024) return false;
-  return true;
+async function _ensureFfmpeg(onProgress) {
+  if (_ffmpegInst?.isLoaded()) return _ffmpegInst;
+  onProgress(0, 'Loading ffmpeg…');
+  const { createFFmpeg } = window.FFmpeg;
+  const inst = createFFmpeg({ log: false, corePath: '/js/ffmpeg/ffmpeg-core.js' });
+  await inst.load();
+  _ffmpegInst = inst;
+  return _ffmpegInst;
 }
 
-async function _encodeToMp3(file, onProgress) {
-  const arrayBuffer = await file.arrayBuffer();
+async function _preprocessWithFfmpeg(file, onProgress) {
+  if (file.size > 500 * 1024 * 1024) return null;  // too large for browser RAM
+  if (_ffmpegBusy) return null;                      // already encoding, use server
 
-  onProgress(5, 'Decoding audio…');
-  const audioCtx = new AudioContext();
-  let audioBuffer;
+  const inputExt  = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : '';
+  const inputName = 'input' + inputExt;
+
+  _ffmpegBusy = true;
   try {
-    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    const ff = await _ensureFfmpeg(onProgress);
+
+    ff.setProgress(({ ratio }) => {
+      if (ratio > 0) onProgress(20 + Math.round(ratio * 75), 'Encoding MP3…');
+    });
+
+    onProgress(15, 'Reading file…');
+    const inputData = new Uint8Array(await file.arrayBuffer());
+    if (state.selectedFile !== file) return null;
+
+    for (const p of [inputName, 'output.mp3']) { try { ff.FS('unlink', p); } catch {} }
+    ff.FS('writeFile', inputName, inputData);
+
+    onProgress(18, 'Encoding MP3…');
+    await ff.run('-i', inputName, '-vn', '-ar', '16000', '-ac', '1', '-ab', '32k', 'output.mp3');
+
+    if (state.selectedFile !== file) return null;
+
+    const data = ff.FS('readFile', 'output.mp3');
+    return new Blob([data.buffer], { type: 'audio/mpeg' });
+
+  } catch (err) {
+    console.warn('[ffmpeg] encode failed, falling back to server:', err);
+    return null;
   } finally {
-    audioCtx.close();
-  }
-
-  onProgress(18, 'Resampling to 16 kHz…');
-  const TARGET_SR = 16000;
-  const numFrames = Math.ceil(audioBuffer.duration * TARGET_SR);
-  const offlineCtx = new OfflineAudioContext(1, numFrames, TARGET_SR);
-  const src = offlineCtx.createBufferSource();
-  src.buffer = audioBuffer;
-  src.connect(offlineCtx.destination);
-  src.start();
-  const resampled = await offlineCtx.startRendering();
-
-  const pcm    = resampled.getChannelData(0);
-  const int16  = new Int16Array(pcm.length);
-  for (let i = 0; i < pcm.length; i++) {
-    int16[i] = Math.max(-32768, Math.min(32767, pcm[i] * 32767));
-  }
-
-  onProgress(30, 'Encoding MP3…');
-  const encoder   = new lamejs.Mp3Encoder(1, TARGET_SR, 32);
-  const FRAME     = 1152;
-  const BATCH     = 200;         // frames per yield tick
-  const chunks    = [];
-  const totalFrames = Math.ceil(int16.length / FRAME);
-
-  for (let f = 0; f < int16.length; f += FRAME * BATCH) {
-    for (let j = f; j < Math.min(f + FRAME * BATCH, int16.length); j += FRAME) {
-      const slice = int16.subarray(j, Math.min(j + FRAME, int16.length));
-      const buf = encoder.encodeBuffer(slice);
-      if (buf.length > 0) chunks.push(new Uint8Array(buf));
+    if (_ffmpegInst?.isLoaded()) {
+      for (const p of [inputName, 'output.mp3']) { try { _ffmpegInst.FS('unlink', p); } catch {} }
     }
-    const frameDone = Math.min(Math.ceil(f / FRAME) + BATCH, totalFrames);
-    onProgress(30 + Math.round(frameDone / totalFrames * 65), 'Encoding MP3…');
-    await new Promise(r => setTimeout(r, 0));  // yield to keep UI responsive
+    _ffmpegBusy = false;
   }
-
-  const tail = encoder.flush();
-  if (tail.length > 0) chunks.push(new Uint8Array(tail));
-
-  return new Blob(chunks, { type: 'audio/mpeg' });
 }
 
 async function handleFileSelected(file) {
@@ -408,25 +404,20 @@ async function handleFileSelected(file) {
   let uploadFile = file;
   let clientPreprocessed = false;
 
-  if (typeof lamejs !== 'undefined' && _canEncodeInBrowser(file)) {
-    updateProgress(3, 'Encoding MP3…', 'preprocess', 0);
-    try {
-      const mp3Blob = await _encodeToMp3(file, (pct, label) => {
-        if (state.selectedFile !== file) throw new Error('cancelled');
-        updateProgress(3, label, 'preprocess', pct);
-      });
-      if (state.selectedFile !== file) return;   // file was replaced mid-encode
-      const ext = file.name.lastIndexOf('.') >= 0
+  if (window.FFmpeg) {
+    updateProgress(3, 'Preparing audio…', 'preprocess', 0);
+    const mp3Blob = await _preprocessWithFfmpeg(file, (pct, label) => {
+      updateProgress(3, label, 'preprocess', pct);
+    });
+    if (state.selectedFile !== file) return;  // file replaced while encoding
+    if (mp3Blob) {
+      const baseName = file.name.includes('.')
         ? file.name.slice(0, file.name.lastIndexOf('.')) + '.mp3'
         : file.name + '.mp3';
-      uploadFile = new File([mp3Blob], ext, { type: 'audio/mpeg' });
+      uploadFile = new File([mp3Blob], baseName, { type: 'audio/mpeg' });
+      state.processedSize = mp3Blob.size;
       clientPreprocessed = true;
-      const origMB = (file.size / 1024 / 1024).toFixed(1);
-      const mp3MB  = (mp3Blob.size / 1024 / 1024).toFixed(1);
-      console.log(`[preprocess] client: ${origMB} MB → ${mp3MB} MB MP3`);
-    } catch (err) {
-      if (err.message === 'cancelled') return;
-      console.warn('[preprocess] browser encode failed, uploading raw:', err);
+      console.log(`[ffmpeg] ${formatBytes(file.size)} → ${formatBytes(mp3Blob.size)} MP3`);
     }
   }
 

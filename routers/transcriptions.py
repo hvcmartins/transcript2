@@ -185,10 +185,11 @@ async def _run_preprocess(
         }))
 
         await manager.broadcast(preprocess_id, {
-            "type":          "preprocess_done",
-            "preprocess_id": preprocess_id,
-            "duration_s":    duration_s,
-            "original_name": original_name,
+            "type":            "preprocess_done",
+            "preprocess_id":   preprocess_id,
+            "duration_s":      duration_s,
+            "original_name":   original_name,
+            "compressed_size": compressed_size,
         })
 
     except Exception as exc:

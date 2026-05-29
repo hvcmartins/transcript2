@@ -234,12 +234,19 @@ body { display: flex; min-height: 100vh; }
 
 .file-details { flex: 1; overflow: hidden; }
 .file-name { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
+.file-meta { display: flex; align-items: center; gap: 8px; }
 .file-duration {
   font-size: 12px;
   color: var(--accent2);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
 }
+.file-size {
+  font-size: 11px;
+  color: var(--text3);
+  font-variant-numeric: tabular-nums;
+}
+.file-size:not(:empty)::before { content: '·'; margin-right: 8px; color: var(--text3); }
 
 .options-grid {
   display: grid;
