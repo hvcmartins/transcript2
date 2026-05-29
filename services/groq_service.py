@@ -319,13 +319,11 @@ def _call_groq(client, file_path: str, language: str, model: str) -> dict:
             "text":        _get(seg, "text",  ""),
             "avg_logprob": _get(seg, "avg_logprob", None),
         })
-    # Log confidence availability so it's visible in container logs
     lp_vals = [s["avg_logprob"] for s in segments if s["avg_logprob"] is not None]
-    import logging
-    logging.getLogger(__name__).info(
-        "Groq segments=%d  avg_logprob present=%d  sample=%s",
-        len(segments), len(lp_vals),
-        f"{lp_vals[:3]}" if lp_vals else "none"
+    print(
+        f"[groq] segments={len(segments)}  avg_logprob present={len(lp_vals)}"
+        f"  sample={lp_vals[:3] if lp_vals else 'none'}",
+        flush=True,
     )
 
     words = []
