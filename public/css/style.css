@@ -1055,6 +1055,16 @@ body { display: flex; min-height: 100vh; }
   padding: 1px 2px;
   border-radius: 3px;
 }
+/* Segment-level karaoke (OpenVINO / post-edit mode — no word spans available) */
+.segment.k-on .seg-words,
+.segment.k-on .seg-text {
+  background: rgba(59,130,246,.15);
+  border-radius: 3px;
+}
+/* Segment-level confidence — only visible in edit mode so it doesn't clash with word highlights */
+.conf-mode.edit-mode .segment[data-conf="high"] { border-left: 3px solid rgba(34,197,94,.6);  padding-left: 9px; }
+.conf-mode.edit-mode .segment[data-conf="mid"]  { border-left: 3px solid rgba(245,158,11,.6); padding-left: 9px; }
+.conf-mode.edit-mode .segment[data-conf="low"]  { border-left: 3px solid rgba(239,68,68,.6);  padding-left: 9px; }
 
 /* ─── History play button ────────────────────────────────────────────── */
 .hist-play {
@@ -1165,6 +1175,7 @@ body { display: flex; min-height: 100vh; }
 .hist-retranscribe:hover { border-color: var(--accent); color: var(--accent2); background: rgba(59,130,246,.07); }
 
 /* ─── Find & Replace bar ─────────────────────────────────────────────── */
+#findReplaceBar[hidden] { display: none; }
 #findReplaceBar {
   display: flex;
   flex-direction: column;

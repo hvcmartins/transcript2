@@ -490,6 +490,10 @@ async function loadTranscription(id) {
       segments.forEach(seg => {
         const div = document.createElement('div');
         div.className = 'segment';
+        div.dataset.start = seg.start;
+        div.dataset.end   = seg.end;
+        const segLp = seg.avg_logprob ?? null;
+        if (segLp != null) div.dataset.conf = segLp < -1.0 ? 'low' : segLp < -0.5 ? 'mid' : 'high';
         const timeHtml = `<span class="seg-time" data-t="${seg.start}">${secondsToMMSS(seg.start)}</span>`;
 
         let bodyHtml;
@@ -561,8 +565,9 @@ async function loadTranscription(id) {
       el.segmentView.appendChild(div);
     }
 
-    // Cache word spans for karaoke and wire up click-to-seek
-    player.wordSpans = Array.from(el.segmentView.querySelectorAll('.word[data-s]'));
+    // Cache word spans (and segment divs as fallback) for karaoke; wire up click-to-seek
+    player.wordSpans    = Array.from(el.segmentView.querySelectorAll('.word[data-s]'));
+    player.segmentDivs  = Array.from(el.segmentView.querySelectorAll('.segment[data-start]'));
     player.wordSpans.forEach(sp => {
       sp.addEventListener('click', () => playerSeekTo(id, parseFloat(sp.dataset.s)));
     });
@@ -616,6 +621,7 @@ function enterEditMode() {
   if (state.editMode) return;
   state.editMode = true;
   cancelAnimationFrame(player.rafId); // pause karaoke during editing
+  el.segmentView.classList.add('edit-mode');
 
   el.segmentView.querySelectorAll('.seg-words, .seg-text').forEach(container => {
     // Replace inner spans with plain text so contenteditable is clean
@@ -632,6 +638,8 @@ function exitEditMode() {
   if (!state.editMode) return;
   clearTimeout(state.saveTimer);
   state.editMode = false;
+  el.segmentView.classList.remove('edit-mode');
+  player.wordSpans = []; // spans were stripped; karaoke falls back to segment divs
 
   // Collect edits and persist
   const containers = [...el.segmentView.querySelectorAll('[contenteditable="true"]')];
@@ -909,19 +917,23 @@ function playerClose() {
 function _karaokeFrame() {
   if (player.audio.paused) return;
 
-  // Lazily refresh spans if the current transcript is showing but spans not yet cached
+  // Lazily refresh word spans (only when actually empty, e.g. after transcript load)
   if (player.wordSpans.length === 0 && player.txId === state.currentTranscriptionId) {
     player.wordSpans = Array.from(el.segmentView.querySelectorAll('.word[data-s]'));
   }
 
-  const t     = player.audio.currentTime;
-  const spans = player.wordSpans;
+  // Use word spans when available; fall back to segment divs (OpenVINO / post-edit mode)
+  const useSegments = player.wordSpans.length === 0;
+  const spans = useSegments ? player.segmentDivs : player.wordSpans;
 
-  // Binary search: last span whose start ≤ t  (highlights the word being spoken)
+  const t = player.audio.currentTime;
+
+  // Binary search: last element whose start ≤ t
   let lo = 0, hi = spans.length - 1, found = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (parseFloat(spans[mid].dataset.s) <= t) { found = mid; lo = mid + 1; }
+    const start = parseFloat(useSegments ? spans[mid].dataset.start : spans[mid].dataset.s);
+    if (start <= t) { found = mid; lo = mid + 1; }
     else hi = mid - 1;
   }
 
