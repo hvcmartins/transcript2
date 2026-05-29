@@ -335,7 +335,81 @@ el.dropZone.addEventListener('drop', (e) => {
   if (file) handleFileSelected(file);
 });
 
-// ─── Client-side ffmpeg preprocessing ────────────────────────────────────────
+// ─── Client-side preprocessing ───────────────────────────────────────────────
+const _MP4_EXTS = new Set(['mp4', 'm4a', 'm4v', 'mov']);
+
+// Extract only the audio track from an MP4/M4A/MOV using mp4box.js.
+// Reads the file in 2 MB chunks — never loads the whole video into RAM.
+// Returns a Blob containing a fragmented MP4 with just the audio track,
+// typically 1–5 % the size of the original video.
+async function _extractMp4Audio(file, onProgress) {
+  if (typeof MP4Box === 'undefined') return null;
+
+  return new Promise((resolve, reject) => {
+    const mp4in  = MP4Box.createFile();
+    let audioId  = null;
+    let totalSmp = 1;
+    const dataBufs = [];
+    let initBuf  = null;
+    let done     = false;
+
+    function _finish() {
+      if (done) return;
+      done = true;
+      if (!initBuf || dataBufs.length === 0) { reject(new Error('No audio data')); return; }
+      const total = initBuf.byteLength + dataBufs.reduce((s, b) => s + b.byteLength, 0);
+      const out = new Uint8Array(total);
+      let pos = 0;
+      out.set(new Uint8Array(initBuf), pos); pos += initBuf.byteLength;
+      for (const b of dataBufs) { out.set(new Uint8Array(b), pos); pos += b.byteLength; }
+      resolve(new Blob([out], { type: 'video/mp4' }));
+    }
+
+    mp4in.onReady = (info) => {
+      const track = (info.audioTracks || []).concat(
+        (info.tracks || []).filter(t => t.type === 'audio')
+      )[0];
+      if (!track) { reject(new Error('No audio track')); return; }
+      audioId  = track.id;
+      totalSmp = track.nb_samples || 1;
+      mp4in.setSegmentOptions(audioId, null, { nbSamples: 1000 });
+      const segs = mp4in.initializeSegmentation();
+      const seg  = segs.find(s => s.id === audioId) || segs[0];
+      if (seg) initBuf = seg.buffer;
+      mp4in.start();
+    };
+
+    mp4in.onSegment = (id, user, buffer, sampleNum, last) => {
+      if (id !== audioId) return;
+      dataBufs.push(buffer);
+      onProgress(30 + Math.round(Math.min(sampleNum, totalSmp) / totalSmp * 65), 'Extracting audio track…');
+      if (last) _finish();
+    };
+
+    mp4in.onError = (e) => { if (!done) reject(new Error('MP4Box: ' + e)); };
+
+    (async () => {
+      try {
+        const CHUNK = 2 * 1024 * 1024;
+        let offset = 0;
+        while (offset < file.size) {
+          const end = Math.min(offset + CHUNK, file.size);
+          const buf = await file.slice(offset, end).arrayBuffer();
+          buf.fileStart = offset;
+          onProgress(Math.round(offset / file.size * 30), 'Parsing container…');
+          const next = mp4in.appendBuffer(buf);
+          offset = (typeof next === 'number' && next > offset) ? next : end;
+        }
+        mp4in.flush();
+        await Promise.resolve();  // allow synchronous onSegment(last) to fire
+        _finish();                // no-op if already resolved
+      } catch (e) {
+        if (!done) reject(e);
+      }
+    })();
+  });
+}
+
 let _ffmpegInst = null;
 let _ffmpegBusy = false;
 
@@ -350,30 +424,49 @@ async function _ensureFfmpeg(onProgress) {
 }
 
 async function _preprocessWithFfmpeg(file, onProgress) {
-  if (file.size > 500 * 1024 * 1024) return null;  // too large for browser RAM
-  if (_ffmpegBusy) return null;                      // already encoding, use server
+  if (_ffmpegBusy) return null;
 
-  const inputExt  = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : '';
-  const inputName = 'input' + inputExt;
+  const ext         = file.name.split('.').pop().toLowerCase();
+  const isMp4       = _MP4_EXTS.has(ext);
+  // For non-MP4 formats we still need to load the whole file into WASM RAM
+  if (!isMp4 && file.size > 500 * 1024 * 1024) return null;
 
   _ffmpegBusy = true;
+  const inputName = isMp4 ? 'input.mp4' : ('input' + (file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : ''));
+
   try {
     const ff = await _ensureFfmpeg(onProgress);
 
+    // --- For MP4/M4A/MOV: strip video first with mp4box.js ---
+    let inputBlob = file;
+    if (isMp4) {
+      onProgress(5, 'Parsing container…');
+      try {
+        const audioOnly = await _extractMp4Audio(file, onProgress);
+        if (audioOnly) {
+          inputBlob = audioOnly;
+          console.log(`[mp4box] ${formatBytes(file.size)} → ${formatBytes(audioOnly.size)} audio`);
+        }
+      } catch (e) {
+        console.warn('[mp4box] extraction failed, passing full file:', e);
+        if (file.size > 500 * 1024 * 1024) { return null; }  // too large for fallback
+      }
+    }
+
+    if (state.selectedFile !== file) return null;
+
     ff.setProgress(({ ratio }) => {
-      if (ratio > 0) onProgress(20 + Math.round(ratio * 75), 'Encoding MP3…');
+      if (ratio > 0) onProgress(97 + Math.round(ratio * 2), 'Encoding MP3…');
     });
 
-    onProgress(15, 'Reading file…');
-    const inputData = new Uint8Array(await file.arrayBuffer());
+    onProgress(96, 'Encoding MP3…');
+    const inputData = new Uint8Array(await inputBlob.arrayBuffer());
     if (state.selectedFile !== file) return null;
 
     for (const p of [inputName, 'output.mp3']) { try { ff.FS('unlink', p); } catch {} }
     ff.FS('writeFile', inputName, inputData);
 
-    onProgress(18, 'Encoding MP3…');
     await ff.run('-i', inputName, '-vn', '-ar', '16000', '-ac', '1', '-ab', '32k', 'output.mp3');
-
     if (state.selectedFile !== file) return null;
 
     const data = ff.FS('readFile', 'output.mp3');
