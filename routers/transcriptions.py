@@ -101,9 +101,12 @@ async def upload_and_preprocess(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    preprocessed: str = Form(""),   # "true" → file is already 16 kHz mono MP3
 ):
+    already_preprocessed = preprocessed.lower() == "true"
+
     suffix = Path(file.filename or "").suffix.lower() or ".audio"
-    if suffix not in ALLOWED_EXTENSIONS:
+    if not already_preprocessed and suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix}")
 
     preprocess_id = uuid.uuid4().hex
@@ -123,7 +126,7 @@ async def upload_and_preprocess(
     manager = request.app.state.manager
     background_tasks.add_task(
         _run_preprocess, preprocess_id, str(raw_path),
-        file.filename or raw_filename, size, manager,
+        file.filename or raw_filename, size, manager, already_preprocessed,
     )
 
     return {"preprocess_id": preprocess_id}
@@ -135,37 +138,43 @@ async def _run_preprocess(
     original_name: str,
     original_size: int,
     manager,
+    already_preprocessed: bool = False,
 ) -> None:
     """
-    Background: preprocess the uploaded file → compressed MP3.
+    Background: preprocess the uploaded file → 16 kHz mono MP3.
+    When already_preprocessed=True the client already encoded MP3; skip ffmpeg.
     Saves {preprocess_id}.mp3 + {preprocess_id}.json sidecar in UPLOAD_DIR.
     Broadcasts progress/done/error to WebSocket channel `preprocess_id`.
     """
     async def _send(phase_pct: int, label: str = "Preprocessing audio…"):
         await manager.broadcast(preprocess_id, {
-            "type":         "preprocess_progress",
+            "type":          "preprocess_progress",
             "preprocess_id": preprocess_id,
-            "phase_pct":    phase_pct,
-            "label":        label,
+            "phase_pct":     phase_pct,
+            "label":         label,
         })
 
-    loop = asyncio.get_event_loop()
+    perm_path = UPLOAD_DIR / f"{preprocess_id}.mp3"
 
-    def _cb(pct: int):
-        asyncio.run_coroutine_threadsafe(_send(pct), loop)
-
-    await _send(0)
     try:
-        processed_path, is_temp = await asyncio.to_thread(preprocess_audio, raw_path, _cb)
+        if already_preprocessed:
+            # Client already produced a 16 kHz mono MP3 — just move it into place.
+            if os.path.realpath(raw_path) != os.path.realpath(str(perm_path)):
+                shutil.move(raw_path, str(perm_path))
+        else:
+            loop = asyncio.get_event_loop()
 
-        # Move compressed file to permanent location; always delete raw upload
-        perm_path = str(UPLOAD_DIR / f"{preprocess_id}.mp3")
-        shutil.move(processed_path, perm_path)
-        if os.path.realpath(raw_path) != os.path.realpath(perm_path):
-            Path(raw_path).unlink(missing_ok=True)
+            def _cb(pct: int):
+                asyncio.run_coroutine_threadsafe(_send(pct), loop)
 
-        compressed_size = Path(perm_path).stat().st_size
-        duration_s = await asyncio.to_thread(get_audio_duration, perm_path)
+            await _send(0)
+            processed_path, _ = await asyncio.to_thread(preprocess_audio, raw_path, _cb)
+            shutil.move(processed_path, str(perm_path))
+            if os.path.realpath(raw_path) != os.path.realpath(str(perm_path)):
+                Path(raw_path).unlink(missing_ok=True)
+
+        compressed_size = perm_path.stat().st_size
+        duration_s = await asyncio.to_thread(get_audio_duration, str(perm_path))
 
         sidecar = UPLOAD_DIR / f"{preprocess_id}.json"
         sidecar.write_text(json.dumps({
@@ -186,8 +195,8 @@ async def _run_preprocess(
         import traceback
         print(f"Preprocess error [{preprocess_id}]: {exc}\n{traceback.format_exc()}")
         Path(raw_path).unlink(missing_ok=True)
-        Path(UPLOAD_DIR / f"{preprocess_id}.mp3").unlink(missing_ok=True)
-        Path(UPLOAD_DIR / f"{preprocess_id}.json").unlink(missing_ok=True)
+        perm_path.unlink(missing_ok=True)
+        (UPLOAD_DIR / f"{preprocess_id}.json").unlink(missing_ok=True)
         await manager.broadcast(preprocess_id, {
             "type":          "preprocess_error",
             "preprocess_id": preprocess_id,

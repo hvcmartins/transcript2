@@ -330,21 +330,99 @@ el.dropZone.addEventListener('drop', (e) => {
   if (file) handleFileSelected(file);
 });
 
+async function _encodeToMp3(file, onProgress) {
+  const arrayBuffer = await file.arrayBuffer();
+
+  onProgress(5, 'Decoding audio…');
+  const audioCtx = new AudioContext();
+  let audioBuffer;
+  try {
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  } finally {
+    audioCtx.close();
+  }
+
+  onProgress(18, 'Resampling to 16 kHz…');
+  const TARGET_SR = 16000;
+  const numFrames = Math.ceil(audioBuffer.duration * TARGET_SR);
+  const offlineCtx = new OfflineAudioContext(1, numFrames, TARGET_SR);
+  const src = offlineCtx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(offlineCtx.destination);
+  src.start();
+  const resampled = await offlineCtx.startRendering();
+
+  const pcm    = resampled.getChannelData(0);
+  const int16  = new Int16Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) {
+    int16[i] = Math.max(-32768, Math.min(32767, pcm[i] * 32767));
+  }
+
+  onProgress(30, 'Encoding MP3…');
+  const encoder   = new lamejs.Mp3Encoder(1, TARGET_SR, 32);
+  const FRAME     = 1152;
+  const BATCH     = 200;         // frames per yield tick
+  const chunks    = [];
+  const totalFrames = Math.ceil(int16.length / FRAME);
+
+  for (let f = 0; f < int16.length; f += FRAME * BATCH) {
+    for (let j = f; j < Math.min(f + FRAME * BATCH, int16.length); j += FRAME) {
+      const slice = int16.subarray(j, Math.min(j + FRAME, int16.length));
+      const buf = encoder.encodeBuffer(slice);
+      if (buf.length > 0) chunks.push(new Uint8Array(buf));
+    }
+    const frameDone = Math.min(Math.ceil(f / FRAME) + BATCH, totalFrames);
+    onProgress(30 + Math.round(frameDone / totalFrames * 65), 'Encoding MP3…');
+    await new Promise(r => setTimeout(r, 0));  // yield to keep UI responsive
+  }
+
+  const tail = encoder.flush();
+  if (tail.length > 0) chunks.push(new Uint8Array(tail));
+
+  return new Blob(chunks, { type: 'audio/mpeg' });
+}
+
 async function handleFileSelected(file) {
-  clearSelection();   // cancel any in-progress preprocessing
+  clearSelection();
   state.selectedFile = file;
 
-  // Show preprocessing progress immediately
   el.progressFilename.textContent = file.name;
   el.progressEta.textContent = '';
   el.progressPanel.hidden = false;
   el.phaseSection.hidden  = false;
   el.phaseBar.style.width = '0%';
   el.phasePct.textContent = '0%';
-  updateProgress(3, 'Uploading…', 'preprocess', 0);
+
+  let uploadFile = file;
+  let clientPreprocessed = false;
+
+  if (typeof lamejs !== 'undefined') {
+    updateProgress(3, 'Encoding MP3…', 'preprocess', 0);
+    try {
+      const mp3Blob = await _encodeToMp3(file, (pct, label) => {
+        if (state.selectedFile !== file) throw new Error('cancelled');
+        updateProgress(3, label, 'preprocess', pct);
+      });
+      if (state.selectedFile !== file) return;   // file was replaced mid-encode
+      const ext = file.name.lastIndexOf('.') >= 0
+        ? file.name.slice(0, file.name.lastIndexOf('.')) + '.mp3'
+        : file.name + '.mp3';
+      uploadFile = new File([mp3Blob], ext, { type: 'audio/mpeg' });
+      clientPreprocessed = true;
+      const origMB = (file.size / 1024 / 1024).toFixed(1);
+      const mp3MB  = (mp3Blob.size / 1024 / 1024).toFixed(1);
+      console.log(`[preprocess] client: ${origMB} MB → ${mp3MB} MB MP3`);
+    } catch (err) {
+      if (err.message === 'cancelled') return;
+      console.warn('[preprocess] browser encode failed, uploading raw:', err);
+    }
+  }
+
+  updateProgress(3, 'Uploading…', 'preprocess', clientPreprocessed ? 100 : 0);
 
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append('file', uploadFile);
+  if (clientPreprocessed) formData.append('preprocessed', 'true');
 
   try {
     const res = await fetch('/api/transcriptions/preprocess', { method: 'POST', body: formData });
@@ -355,12 +433,13 @@ async function handleFileSelected(file) {
     const { preprocess_id } = await res.json();
     state.preprocessId = preprocess_id;
 
-    // Subscribe to preprocessing events on this channel
     if (state.ws?.readyState === 1) {
       state.ws.send(JSON.stringify({ type: 'register', sessionId: preprocess_id }));
     }
 
-    updateProgress(5, 'Preprocessing audio…', 'preprocess', 0);
+    if (!clientPreprocessed) {
+      updateProgress(5, 'Preprocessing audio…', 'preprocess', 0);
+    }
 
   } catch (err) {
     clearSelection();
