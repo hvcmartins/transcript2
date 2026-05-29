@@ -474,9 +474,13 @@ async function loadTranscription(id) {
     const words       = data.words    || [];
     const hasSpeakers = segments.some(s => s.speaker);
     const hasWords    = words.length > 0;
-    // Track whether confidence data exists at all (separate from whether any words are flagged)
-    const hasConfData = segments.some(s => s.avg_logprob != null)
-                     || words.some(w => w.probability != null);
+    // Confidence data is useful only when there is real per-segment variance.
+    // Groq returns a constant avg_logprob (~-0.314) for all segments when it
+    // doesn't compute per-segment scores — detect and treat that as no data.
+    const logprobs = segments.map(s => s.avg_logprob).filter(v => v != null);
+    const hasVaryingLogprob = logprobs.length > 0
+      && !logprobs.every(v => Math.abs(v - logprobs[0]) < 0.001);
+    const hasConfData = hasVaryingLogprob || words.some(w => w.probability != null);
     el.segmentView.dataset.hasConf = hasConfData ? 'true' : 'false';
 
     if (segments.length > 0) {
@@ -500,13 +504,13 @@ async function loadTranscription(id) {
               ? ' ' + w.word : w.word;
             let confAttr = '';
             if (w.probability != null) {
-              // Per-word probability 0–1 (Groq may not supply this)
-              if (w.probability < 0.65) confAttr = ' data-conf="low"';
-              else if (w.probability < 0.85) confAttr = ' data-conf="mid"';
+              // Per-word probability 0–1
+              if (w.probability < 0.50) confAttr = ' data-conf="low"';
+              else if (w.probability < 0.75) confAttr = ' data-conf="mid"';
             } else if (segLogp != null) {
-              // Segment avg_logprob (negative; less negative = more confident)
-              if (segLogp < -0.7) confAttr = ' data-conf="low"';
-              else if (segLogp < -0.3) confAttr = ' data-conf="mid"';
+              // Segment avg_logprob — tightened so Groq's ~-0.31 baseline doesn't trigger
+              if (segLogp < -1.0) confAttr = ' data-conf="low"';
+              else if (segLogp < -0.5) confAttr = ' data-conf="mid"';
             }
             whtml += `<span class="word" data-s="${w.start}" data-e="${w.end}"${confAttr}>${escapeHtml(text)}</span>`;
             wordIdx++;
@@ -516,8 +520,8 @@ async function loadTranscription(id) {
           let segConf = '';
           const lp = seg.avg_logprob ?? null;
           if (lp != null) {
-            if (lp < -0.7) segConf = ' data-conf="low"';
-            else if (lp < -0.3) segConf = ' data-conf="mid"';
+            if (lp < -1.0) segConf = ' data-conf="low"';
+            else if (lp < -0.5) segConf = ' data-conf="mid"';
           }
           bodyHtml = `<span class="seg-text"${segConf}>${escapeHtml(seg.text.trim())}</span>`;
         }
