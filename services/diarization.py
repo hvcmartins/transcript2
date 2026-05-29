@@ -73,9 +73,13 @@ def diarize(audio_path: str, segments: list[dict]) -> list[dict]:
 
         X = StandardScaler().fit_transform(np.array(features))
 
-        # ── Pick number of speakers (2–5) via silhouette score ───────────────
+        # ── Pick number of speakers (2–4) via silhouette score ───────────────
+        # Threshold of 0.30: single-speaker recordings routinely score 0.10–0.25
+        # due to natural pitch/content variation; genuine multi-speaker audio
+        # typically scores >= 0.30.
+        MULTI_SPEAKER_THRESHOLD = 0.30
         best_n, best_score = 2, -1.0
-        for n in range(2, min(6, len(features))):
+        for n in range(2, min(5, len(features))):
             km = KMeans(n_clusters=n, n_init=10, random_state=42)
             labels = km.fit_predict(X)
             if len(set(labels)) < n:
@@ -84,8 +88,7 @@ def diarize(audio_path: str, segments: list[dict]) -> list[dict]:
             if score > best_score:
                 best_score, best_n = score, n
 
-        # If score is very low, treat the audio as single-speaker
-        if best_score < 0.12:
+        if best_score < MULTI_SPEAKER_THRESHOLD:
             return [{**s, "speaker": "Speaker A"} for s in segments]
 
         km = KMeans(n_clusters=best_n, n_init=10, random_state=42)

@@ -23,6 +23,7 @@ const state = {
   editMode:               false,
   saveTimer:              null,
   savePending:            false,
+  transcriptOrigin:       'upload',  // 'upload' | 'history'
 };
 
 // ─── Audio Player ─────────────────────────────────────────────────────────────
@@ -466,7 +467,8 @@ function secondsToHMMSS(s) {
   return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
 }
 
-async function loadTranscription(id) {
+async function loadTranscription(id, origin = 'upload') {
+  state.transcriptOrigin = origin;
   try {
     const res = await fetch(`/api/transcriptions/${id}`);
     if (!res.ok) throw new Error('Not found');
@@ -1098,7 +1100,7 @@ el.copyBtn.addEventListener('click', async () => {
 });
 
 // ─── Back Button ─────────────────────────────────────────────────────────────
-el.backBtn.addEventListener('click', () => { exitEditMode(); showView('upload'); });
+el.backBtn.addEventListener('click', () => { exitEditMode(); showView(state.transcriptOrigin || 'upload'); });
 
 // ─── History ─────────────────────────────────────────────────────────────────
 async function refreshHistory(q = '') {
@@ -1247,9 +1249,9 @@ function renderHistory(items, q = '') {
     if (isComplete) {
       div.querySelector('.history-info').addEventListener('click', (e) => {
         if (e.target.closest('.hist-rename') || e.target.tagName === 'INPUT') return;
-        loadTranscription(item.id);
+        loadTranscription(item.id, 'history');
       });
-      div.querySelector('.history-icon').addEventListener('click', () => loadTranscription(item.id));
+      div.querySelector('.history-icon').addEventListener('click', () => loadTranscription(item.id, 'history'));
 
       const hplay = div.querySelector('.hist-play');
       if (hplay) {
@@ -1258,7 +1260,7 @@ function renderHistory(items, q = '') {
           if (player.txId === item.id) {
             playerToggle(item.id);
           } else {
-            await loadTranscription(item.id);
+            await loadTranscription(item.id, 'history');
             playerLoad(item.id);
             player.audio.play();
           }
