@@ -145,8 +145,10 @@ def _extract_seg_logprobs(captured_logits: list, token_ids: list, tokenizer) -> 
     for logits, tok_id in zip(captured_logits[:n_match], gen_token_ids[:n_match]):
         logits = logits.astype(np.float64)
         shifted = logits - logits.max()
-        lp = shifted[tok_id] - np.log(np.sum(np.exp(shifted)))
-        token_logprobs.append((tok_id, float(lp)))
+        # Clamp to [-10, 0]: suppressed tokens have logit=-inf so shifted[tok_id]
+        # can be -inf; clamp prevents -inf propagating into avg_logprob.
+        lp = float(np.clip(shifted[tok_id] - np.log(np.sum(np.exp(shifted))), -10.0, 0.0))
+        token_logprobs.append((tok_id, lp))
 
     # Walk pairs of timestamp tokens, average text-token log-probs per segment
     seg_logprobs: list = []
@@ -161,7 +163,8 @@ def _extract_seg_logprobs(captured_logits: list, token_ids: list, tokenizer) -> 
                 if tok_id2 >= ts_begin:
                     i += 1  # consume end-timestamp
                     break
-                text_lps.append(lp2)
+                if np.isfinite(lp2):
+                    text_lps.append(lp2)
                 i += 1
             if text_lps:
                 seg_logprobs.append(float(np.mean(text_lps)))
@@ -259,7 +262,10 @@ def transcribe_openvino(
             end   = float(ts[1] if ts[1] is not None else start) + offset_s
             text  = _TS_RE.sub("", seg.get("text") or "").strip()
             if text:
+                import math
                 avg_lp = seg_logprobs[lp_idx] if lp_idx < len(seg_logprobs) else None
+                if avg_lp is not None and not math.isfinite(avg_lp):
+                    avg_lp = None
                 lp_idx += 1
                 segments.append({"start": start, "end": end, "text": text, "avg_logprob": avg_lp})
 
