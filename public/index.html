@@ -288,6 +288,13 @@
         </div>
       </div>
 
+      <div id="confNoBanner" class="conf-no-banner" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        No confidence data for this transcript — use
+        <button class="conf-rerun-link" onclick="document.querySelector('.nav-btn[data-view=\'history\']').click()">Re-run</button>
+        in History to re-transcribe it with confidence scoring.
+      </div>
+
       <div class="transcript-body" id="transcriptBody">
         <div class="segment-view" id="segmentView"></div>
       </div>

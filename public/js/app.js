@@ -565,6 +565,11 @@ async function loadTranscription(id) {
     state.currentTranscriptionId = id;
     state.currentData            = data;
     state.editMode               = false;  // always start in view mode
+    _confMode                    = false;
+    el.segmentView.classList.remove('conf-mode');
+    if (el.confToggleBtn) { el.confToggleBtn.classList.remove('conf-active'); el.confToggleBtn.title = 'Show confidence highlighting'; }
+    const confBanner = document.getElementById('confNoBanner');
+    if (confBanner) confBanner.hidden = true;
     _syncEditBtn();
     el.transcriptPlayer.hidden = (player.txId !== id);
     showView('transcript');
@@ -835,9 +840,9 @@ el.confToggleBtn?.addEventListener('click', () => {
   el.segmentView.classList.toggle('conf-mode', _confMode);
   el.confToggleBtn.classList.toggle('conf-active', _confMode);
   el.confToggleBtn.title = _confMode ? 'Hide confidence highlighting' : 'Show confidence highlighting';
-  if (_confMode && !el.segmentView.querySelector('[data-conf]')) {
-    showToast('No confidence data — re-transcribe to get highlighting', 'info', 5000);
-  }
+  const noData = _confMode && !el.segmentView.querySelector('[data-conf]');
+  const banner = document.getElementById('confNoBanner');
+  if (banner) banner.hidden = !noData;
 });
 
 // ─── Player ───────────────────────────────────────────────────────────────────
