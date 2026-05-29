@@ -575,7 +575,14 @@ async function loadTranscription(id) {
     state.editMode               = false;  // always start in view mode
     _confMode                    = false;
     el.segmentView.classList.remove('conf-mode');
-    if (el.confToggleBtn) { el.confToggleBtn.classList.remove('conf-active'); el.confToggleBtn.title = 'Show confidence highlighting'; }
+    const confHasData = el.segmentView.dataset.hasConf === 'true';
+    if (el.confToggleBtn) {
+      el.confToggleBtn.classList.remove('conf-active');
+      el.confToggleBtn.disabled = !confHasData;
+      el.confToggleBtn.title = confHasData
+        ? 'Show confidence highlighting'
+        : 'Confidence highlighting not available — Groq does not expose per-segment scores. Use OpenVINO to get this feature.';
+    }
     const confBanner = document.getElementById('confNoBanner');
     if (confBanner) confBanner.hidden = true;
     _syncEditBtn();
@@ -844,13 +851,11 @@ document.addEventListener('keydown', e => {
 
 // ─── Confidence toggle ────────────────────────────────────────────────────────
 el.confToggleBtn?.addEventListener('click', () => {
+  if (el.confToggleBtn.disabled) return;
   _confMode = !_confMode;
   el.segmentView.classList.toggle('conf-mode', _confMode);
   el.confToggleBtn.classList.toggle('conf-active', _confMode);
   el.confToggleBtn.title = _confMode ? 'Hide confidence highlighting' : 'Show confidence highlighting';
-  const noData = _confMode && el.segmentView.dataset.hasConf !== 'true';
-  const banner = document.getElementById('confNoBanner');
-  if (banner) banner.hidden = !noData;
 });
 
 // ─── Player ───────────────────────────────────────────────────────────────────
