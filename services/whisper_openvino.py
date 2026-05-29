@@ -96,8 +96,6 @@ class _LogitCapture:
 
     def __call__(self, input_ids, scores):
         import numpy as np
-        if len(self.captured) == 0:
-            print(f"[openvino-dbg] _LogitCapture first call: scores type={type(scores)} shape={getattr(scores, 'shape', '?')}", flush=True)
         s = scores[0]  # batch 0
         if hasattr(s, "numpy"):
             arr = s.numpy()
@@ -122,27 +120,34 @@ def _extract_seg_logprobs(captured_logits: list, token_ids: list, tokenizer) -> 
     """
     import numpy as np
 
-    print(f"[openvino-dbg] _extract called: captured={len(captured_logits)} token_ids={len(token_ids)}", flush=True)
-
     if not captured_logits:
-        print("[openvino-dbg] early-return: no captured logits", flush=True)
         return []
 
-    try:
-        ts_begin = tokenizer.timestamp_begin
-    except AttributeError:
-        print("[openvino-dbg] early-return: no timestamp_begin attr", flush=True)
+    # WhisperTokenizerFast doesn't expose .timestamp_begin; fall back to vocab lookup
+    ts_begin: int | None = getattr(tokenizer, "timestamp_begin", None)
+    if ts_begin is None:
+        tok = tokenizer.convert_tokens_to_ids("<|0.00|>")
+        if isinstance(tok, int) and tok not in (None, getattr(tokenizer, "unk_token_id", -1)):
+            ts_begin = tok
+    if ts_begin is None:
         return []
 
-    num_forced = len(token_ids) - len(captured_logits)
-    print(f"[openvino-dbg] num_forced={num_forced} ts_begin={ts_begin} non_forced={token_ids[num_forced:num_forced+12]}", flush=True)
-    if num_forced < 0:
-        print("[openvino-dbg] early-return: num_forced<0", flush=True)
-        return []
+    # The OV model may call the LogitsProcessor for EOS/pad steps that don't produce
+    # a token in ids[0], so captured can be >= len(token_ids).  Clamp to be safe.
+    num_forced = max(0, len(token_ids) - len(captured_logits))
+    gen_token_ids = token_ids[num_forced:]
+    n_match = min(len(gen_token_ids), len(captured_logits))
+
+    print(
+        f"[openvino] logprob extraction: ts_begin={ts_begin} captured={len(captured_logits)}"
+        f" total_toks={len(token_ids)} num_forced={num_forced}"
+        f" first_gen_toks={gen_token_ids[:8]}",
+        flush=True,
+    )
 
     # Compute log-prob of the chosen token at each generation step
     token_logprobs: list[tuple[int, float]] = []
-    for step, (logits, tok_id) in enumerate(zip(captured_logits, token_ids[num_forced:])):
+    for logits, tok_id in zip(captured_logits[:n_match], gen_token_ids[:n_match]):
         logits = logits.astype(np.float64)
         shifted = logits - logits.max()
         lp = shifted[tok_id] - np.log(np.sum(np.exp(shifted)))
