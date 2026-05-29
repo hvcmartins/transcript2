@@ -138,12 +138,7 @@ def _extract_seg_logprobs(captured_logits: list, token_ids: list, tokenizer) -> 
     gen_token_ids = token_ids[num_forced:]
     n_match = min(len(gen_token_ids), len(captured_logits))
 
-    print(
-        f"[openvino] logprob extraction: ts_begin={ts_begin} captured={len(captured_logits)}"
-        f" total_toks={len(token_ids)} num_forced={num_forced}"
-        f" first_gen_toks={gen_token_ids[:8]}",
-        flush=True,
-    )
+
 
     # Compute log-prob of the chosen token at each generation step
     token_logprobs: list[tuple[int, float]] = []
