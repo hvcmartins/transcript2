@@ -50,6 +50,7 @@ async def get_meta():
         "languages":    SUPPORTED_LANGUAGES,
         "ov_models":    ov_models_with_cache,
         "ov_available": OPENVINO_AVAILABLE,
+        "groq_key_set": bool(os.getenv("GROQ_API_KEY")),
     }
 
 
@@ -274,6 +275,18 @@ async def retranscribe(id: str):
     return {"preprocess_id": preprocess_id, "original_name": item["original_name"], "duration_s": item.get("duration")}
 
 
+# ── Cancel ────────────────────────────────────────────────────────────────────
+@router.post("/{id}/cancel", status_code=200)
+async def cancel_transcription(id: str):
+    item = get_transcription(id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    if item["status"] not in ("pending", "processing"):
+        raise HTTPException(status_code=409, detail="Transcription is not in progress")
+    update_transcription(id, {"status": "cancelled", "error_msg": "Cancelled by user"})
+    return {"ok": True}
+
+
 # ── Delete ────────────────────────────────────────────────────────────────────
 @router.delete("/{id}")
 async def delete(id: str):
@@ -301,6 +314,10 @@ async def _run_transcription(
     await _send(5)
 
     try:
+        # ── Check for early cancellation ──────────────────────────────────────
+        if (get_transcription(id) or {}).get("status") == "cancelled":
+            return
+
         # ── Transcribe (file already preprocessed) ────────────────────────────
         result: dict | None = None
 
@@ -342,6 +359,10 @@ async def _run_transcription(
 
         else:
             raise ValueError(f"Unknown source: {source!r}")
+
+        # ── Check for cancellation after long-running transcription ───────────
+        if (get_transcription(id) or {}).get("status") == "cancelled":
+            return
 
         # ── Speaker diarization ───────────────────────────────────────────────
         await _send(80, extra={"label": "Analysing speakers…"})

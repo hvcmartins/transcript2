@@ -69,9 +69,11 @@ const el = {
   phaseBar:             $('phaseBar'),
   phasePct:             $('phasePct'),
   backBtn:              $('backBtn'),
+  cancelTranscribeBtn:  $('cancelTranscribeBtn'),
   metaFilename:         $('metaFilename'),
   metaDuration:         $('metaDuration'),
   metaLanguage:         $('metaLanguage'),
+  metaDescription:      $('metaDescription'),
   exportBtn:            $('exportBtn'),
   exportMenu:           $('exportMenu'),
   copyBtn:              $('copyBtn'),
@@ -421,6 +423,41 @@ el.transcribeBtn.addEventListener('click', async () => {
   }
 });
 
+el.cancelTranscribeBtn?.addEventListener('click', async () => {
+  if (!state.currentTranscriptionId) return;
+  if (!confirm('Cancel this transcription?')) return;
+  try {
+    const res = await fetch(`/api/transcriptions/${state.currentTranscriptionId}/cancel`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Failed');
+    stopPolling();
+    state.transcriptionStartTime = null;
+    state.currentTranscriptionId = null;
+    el.progressPanel.hidden = true;
+    el.phaseSection.hidden  = true;
+    el.progressEta.textContent = '';
+    el.dropZone.hidden = false;
+    showToast('Transcription cancelled', 'info');
+    refreshHistory();
+  } catch (err) {
+    showToast('Cancel failed: ' + err.message, 'error');
+  }
+});
+
+function _reattachToTranscription(id, name, progress) {
+  state.currentTranscriptionId = id;
+  if (state.ws?.readyState === 1) {
+    state.ws.send(JSON.stringify({ type: 'register', sessionId: id }));
+  }
+  startPolling(id);
+  el.optionsPanel.hidden  = true;
+  el.dropZone.hidden      = true;
+  el.progressPanel.hidden = false;
+  el.phaseSection.hidden  = true;
+  if (el.progressFilename) el.progressFilename.textContent = name;
+  updateProgress(progress || 10, 'Transcribing…', null, null);
+  showView('upload');
+}
+
 // ─── Progress + Phase bar + ETA ───────────────────────────────────────────────
 function updateProgress(pct, label, phase, phasePct) {
   el.progressBar.style.width = pct + '%';
@@ -480,6 +517,7 @@ async function loadTranscription(id, origin = 'upload') {
     el.metaDuration.textContent = data.duration ? `⏱ ${secondsToMMSS(data.duration)}` : '';
     el.metaLanguage.textContent = (data.language && data.language !== 'auto')
       ? `🌐 ${data.language.toUpperCase()}` : '';
+    if (el.metaDescription) el.metaDescription.textContent = data.description || '';
 
     el.segmentView.innerHTML = '';
     const segments    = data.segments || [];
@@ -499,11 +537,19 @@ async function loadTranscription(id, origin = 'upload') {
       let lastSpeaker = null;
       let wi = 0;
 
-      segments.forEach(seg => {
+      segments.forEach((seg, segIdx) => {
         const div = document.createElement('div');
         div.className = 'segment';
         div.dataset.start = seg.start;
         div.dataset.end   = seg.end;
+
+        // Paragraph break: speaker change or silence gap > 2 s between segments
+        if (segIdx > 0) {
+          const prev = segments[segIdx - 1];
+          const speakerChanged = hasSpeakers && seg.speaker && seg.speaker !== prev.speaker;
+          const silenceGap     = !hasSpeakers && (seg.start - prev.end) > 2.0;
+          if (speakerChanged || silenceGap) div.classList.add('tx-para-break');
+        }
         const segLp = seg.avg_logprob ?? null;
         if (segLp != null) div.dataset.conf = segLp < -1.0 ? 'low' : segLp < -0.5 ? 'mid' : 'high';
         const timeHtml = `<span class="seg-time" data-t="${seg.start}">${secondsToMMSS(seg.start)}</span>`;
@@ -778,6 +824,7 @@ async function _flushEdits(containers) {
 }
 
 function _showSaveDot() {
+  state.savePending = true;
   if (el.editToggleBtn.querySelector('.save-dot')) return;
   const dot = document.createElement('span');
   dot.className = 'save-dot';
@@ -785,8 +832,13 @@ function _showSaveDot() {
 }
 
 function _removeSaveDot() {
+  state.savePending = false;
   el.editToggleBtn.querySelector('.save-dot')?.remove();
 }
+
+window.addEventListener('beforeunload', e => {
+  if (state.savePending) { e.preventDefault(); e.returnValue = ''; }
+});
 
 el.editToggleBtn?.addEventListener('click', () => {
   if (state.editMode) exitEditMode();
@@ -852,33 +904,15 @@ function _frUpdateCount() {
 function _frScrollToCurrent() {
   if (_frCurrent < 0 || !_frMatches.length) return;
   const containers = _frContainers();
-  const { ci, idx } = _frMatches[_frCurrent];
+  const { ci } = _frMatches[_frCurrent];
   const c = containers[ci];
   if (!c) return;
   c.scrollIntoView({ behavior: 'smooth', block: 'center' });
   c.classList.add('fr-highlight');
   setTimeout(() => c.classList.remove('fr-highlight'), 1500);
-
-  // Select the matched text so the user can see exactly which word matched
-  try {
-    const q = el.frFind.value;
-    const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT, null);
-    let offset = 0, node = walker.nextNode();
-    while (node) {
-      const len = node.textContent.length;
-      if (offset + len > idx) {
-        const range = document.createRange();
-        range.setStart(node, idx - offset);
-        range.setEnd(node, Math.min(idx - offset + q.length, len));
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-        break;
-      }
-      offset += len;
-      node = walker.nextNode();
-    }
-  } catch (_) {}
+  // Note: we intentionally do NOT call window.getSelection() here because
+  // creating a DOM text selection steals keyboard focus from the search input,
+  // causing the "one character at a time" typing bug.
 }
 
 function _frNav(dir) {
@@ -1208,6 +1242,182 @@ function _highlightSearch(html, q) {
   } catch (_) { return html; }
 }
 
+function _buildHistoryItem(item, q) {
+  const div = document.createElement('div');
+  div.className = 'history-item';
+  const isComplete   = item.status === 'completed';
+  const isProcessing = item.status === 'processing' || item.status === 'pending';
+  const playBtn = isComplete
+    ? `<button class="hist-play" data-id="${item.id}" title="Play audio"><span class="hp-icon">▶</span> Play</button>`
+    : '';
+  const rerunBtn = isComplete
+    ? `<button class="hist-retranscribe" data-id="${item.id}" title="Re-transcribe with different settings">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+         Re-run
+       </button>`
+    : '';
+  const descHtml = item.description
+    ? `<div class="history-desc">${escapeHtml(item.description)}</div>` : '';
+  const snippetHtml = item.snippet
+    ? `<div class="history-snippet">"…${_highlightSearch(escapeHtml(item.snippet), q)}…"</div>` : '';
+
+  div.innerHTML = `
+    <label class="history-check-wrap" title="Select">
+      <input type="checkbox" class="history-check" data-id="${item.id}">
+    </label>
+    <div class="history-icon">${getFileIcon(item.original_name)}</div>
+    <div class="history-info">
+      <div class="history-name-row">
+        <div class="history-name">${_highlightSearch(escapeHtml(item.original_name), q)}</div>
+        <button class="hist-rename" data-id="${item.id}" title="Rename">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+      </div>
+      ${descHtml}
+      <div class="history-sub">
+        <span>${formatBytes(item.file_size)}</span>
+        ${item.duration ? `<span>⏱ ${secondsToMMSS(item.duration)}</span>` : ''}
+        <span>${new Date(item.created_at).toLocaleDateString()}</span>
+      </div>
+      ${snippetHtml}
+    </div>
+    <span class="history-badge badge-${item.status}">${item.status}</span>
+    ${playBtn}
+    ${rerunBtn}
+    <button class="history-delete" data-id="${item.id}" title="Delete">🗑</button>
+  `;
+
+  div.querySelector('.history-check').addEventListener('change', updateBulkBar);
+
+  // Rename
+  div.querySelector('.hist-rename').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const nameEl = div.querySelector('.history-name');
+    const input = document.createElement('input');
+    input.className = 'rename-input';
+    input.value = item.original_name;
+    nameEl.replaceWith(input);
+    input.focus(); input.select();
+
+    let _renameCommitted = false;
+
+    const commit = async () => {
+      if (_renameCommitted) return;
+      _renameCommitted = true;
+      const newName = input.value.trim() || item.original_name;
+      const restored = document.createElement('div');
+      restored.className = 'history-name';
+      restored.textContent = newName;
+      input.replaceWith(restored);
+      if (newName !== item.original_name) {
+        try {
+          await fetch(`/api/transcriptions/${item.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ original_name: newName }),
+          });
+          item.original_name = newName;
+          const h = state.history.find(h => h.id === item.id);
+          if (h) h.original_name = newName;
+          showToast('Renamed', 'success');
+        } catch {
+          showToast('Rename failed', 'error');
+        }
+      }
+    };
+
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', ke => {
+      if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
+      if (ke.key === 'Escape') {
+        _renameCommitted = true;
+        const restored = document.createElement('div');
+        restored.className = 'history-name';
+        restored.textContent = item.original_name;
+        input.replaceWith(restored);
+      }
+    });
+  });
+
+  if (isComplete) {
+    div.querySelector('.history-info').addEventListener('click', (e) => {
+      if (e.target.closest('.hist-rename') || e.target.tagName === 'INPUT') return;
+      loadTranscription(item.id, 'history');
+    });
+    div.querySelector('.history-icon').addEventListener('click', () => loadTranscription(item.id, 'history'));
+
+    const hplay = div.querySelector('.hist-play');
+    if (hplay) {
+      hplay.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (player.txId === item.id) {
+          playerToggle(item.id);
+        } else {
+          await loadTranscription(item.id, 'history');
+          playerLoad(item.id);
+          player.audio.play();
+        }
+      });
+    }
+
+    const hrerun = div.querySelector('.hist-retranscribe');
+    if (hrerun) {
+      hrerun.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          const res = await fetch(`/api/transcriptions/${item.id}/retranscribe`, { method: 'POST' });
+          if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+          const { preprocess_id, original_name, duration_s } = await res.json();
+          state.preprocessId  = preprocess_id;
+          state.selectedFile  = { name: original_name };
+          state.audioDuration = duration_s;
+          _showOptionsAfterPreprocess(duration_s);
+          showView('upload');
+        } catch (err) {
+          showToast('Re-transcribe failed: ' + err.message, 'error');
+        }
+      });
+    }
+  }
+
+  if (isProcessing) {
+    div.querySelector('.history-info').addEventListener('click', (e) => {
+      if (e.target.closest('.hist-rename') || e.target.tagName === 'INPUT') return;
+      _reattachToTranscription(item.id, item.original_name, item.progress || 0);
+    });
+  }
+
+  div.querySelector('.history-delete').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm('Delete this transcription?')) return;
+    if (player.txId === item.id) playerClose();
+    await fetch(`/api/transcriptions/${item.id}`, { method: 'DELETE' });
+    showToast('Deleted', 'info');
+    refreshHistory(el.historySearch?.value?.trim() || '');
+  });
+
+  return div;
+}
+
+const _HISTORY_PAGE = 60;
+
+function _appendHistoryChunk(items, offset, q) {
+  el.historyList.querySelector('.history-sentinel')?.remove();
+  const chunk = items.slice(offset, offset + _HISTORY_PAGE);
+  chunk.forEach(item => el.historyList.appendChild(_buildHistoryItem(item, q)));
+  _syncHistoryPlayBtns();
+
+  if (offset + _HISTORY_PAGE < items.length) {
+    const sentinel = document.createElement('div');
+    sentinel.className = 'history-sentinel';
+    el.historyList.appendChild(sentinel);
+    const obs = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) { obs.disconnect(); _appendHistoryChunk(items, offset + _HISTORY_PAGE, q); }
+    }, { rootMargin: '200px' });
+    obs.observe(sentinel);
+  }
+}
+
 function renderHistory(items, q = '') {
   el.historyList.innerHTML = '';
   el.bulkBar.hidden = true;
@@ -1218,156 +1428,7 @@ function renderHistory(items, q = '') {
     return;
   }
 
-  items.forEach(item => {
-    const div = document.createElement('div');
-    div.className = 'history-item';
-    const isComplete = item.status === 'completed';
-    const playBtn = isComplete
-      ? `<button class="hist-play" data-id="${item.id}" title="Play audio"><span class="hp-icon">▶</span> Play</button>`
-      : '';
-    const rerunBtn = isComplete
-      ? `<button class="hist-retranscribe" data-id="${item.id}" title="Re-transcribe with different settings">
-           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-           Re-run
-         </button>`
-      : '';
-    const descHtml = item.description
-      ? `<div class="history-desc">${escapeHtml(item.description)}</div>` : '';
-    const snippetHtml = item.snippet
-      ? `<div class="history-snippet">"…${_highlightSearch(escapeHtml(item.snippet), q)}…"</div>` : '';
-
-    div.innerHTML = `
-      <label class="history-check-wrap" title="Select">
-        <input type="checkbox" class="history-check" data-id="${item.id}">
-      </label>
-      <div class="history-icon">${getFileIcon(item.original_name)}</div>
-      <div class="history-info">
-        <div class="history-name-row">
-          <div class="history-name">${_highlightSearch(escapeHtml(item.original_name), q)}</div>
-          <button class="hist-rename" data-id="${item.id}" title="Rename">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          </button>
-        </div>
-        ${descHtml}
-        <div class="history-sub">
-          <span>${formatBytes(item.file_size)}</span>
-          ${item.duration ? `<span>⏱ ${secondsToMMSS(item.duration)}</span>` : ''}
-          <span>${new Date(item.created_at).toLocaleDateString()}</span>
-        </div>
-        ${snippetHtml}
-      </div>
-      <span class="history-badge badge-${item.status}">${item.status}</span>
-      ${playBtn}
-      ${rerunBtn}
-      <button class="history-delete" data-id="${item.id}" title="Delete">🗑</button>
-    `;
-
-    div.querySelector('.history-check').addEventListener('change', updateBulkBar);
-
-    // Rename
-    div.querySelector('.hist-rename').addEventListener('click', (e) => {
-      e.stopPropagation();
-      const nameEl = div.querySelector('.history-name');
-      const input = document.createElement('input');
-      input.className = 'rename-input';
-      input.value = item.original_name;
-      nameEl.replaceWith(input);
-      input.focus(); input.select();
-
-      let _renameCommitted = false;
-
-      const commit = async () => {
-        if (_renameCommitted) return;
-        _renameCommitted = true;
-        const newName = input.value.trim() || item.original_name;
-        const restored = document.createElement('div');
-        restored.className = 'history-name';
-        restored.textContent = newName;
-        input.replaceWith(restored);
-        if (newName !== item.original_name) {
-          try {
-            await fetch(`/api/transcriptions/${item.id}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ original_name: newName }),
-            });
-            item.original_name = newName;
-            const h = state.history.find(h => h.id === item.id);
-            if (h) h.original_name = newName;
-            showToast('Renamed', 'success');
-          } catch {
-            showToast('Rename failed', 'error');
-          }
-        }
-      };
-
-      input.addEventListener('blur', commit);
-      input.addEventListener('keydown', ke => {
-        if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
-        if (ke.key === 'Escape') {
-          _renameCommitted = true;
-          const restored = document.createElement('div');
-          restored.className = 'history-name';
-          restored.textContent = item.original_name;
-          input.replaceWith(restored);
-        }
-      });
-    });
-
-    if (isComplete) {
-      div.querySelector('.history-info').addEventListener('click', (e) => {
-        if (e.target.closest('.hist-rename') || e.target.tagName === 'INPUT') return;
-        loadTranscription(item.id, 'history');
-      });
-      div.querySelector('.history-icon').addEventListener('click', () => loadTranscription(item.id, 'history'));
-
-      const hplay = div.querySelector('.hist-play');
-      if (hplay) {
-        hplay.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          if (player.txId === item.id) {
-            playerToggle(item.id);
-          } else {
-            await loadTranscription(item.id, 'history');
-            playerLoad(item.id);
-            player.audio.play();
-          }
-        });
-      }
-
-      const hrerun = div.querySelector('.hist-retranscribe');
-      if (hrerun) {
-        hrerun.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          try {
-            const res = await fetch(`/api/transcriptions/${item.id}/retranscribe`, { method: 'POST' });
-            if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
-            const { preprocess_id, original_name, duration_s } = await res.json();
-            state.preprocessId  = preprocess_id;
-            state.selectedFile  = { name: original_name };
-            state.audioDuration = duration_s;
-            _showOptionsAfterPreprocess(duration_s);
-            showView('upload');
-          } catch (err) {
-            showToast('Re-transcribe failed: ' + err.message, 'error');
-          }
-        });
-      }
-    }
-
-    div.querySelector('.history-delete').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm('Delete this transcription?')) return;
-      if (player.txId === item.id) playerClose();
-      await fetch(`/api/transcriptions/${item.id}`, { method: 'DELETE' });
-      showToast('Deleted', 'info');
-      refreshHistory(el.historySearch?.value?.trim() || '');
-    });
-
-    el.historyList.appendChild(div);
-  });
-
-  _syncHistoryPlayBtns();
+  _appendHistoryChunk(items, 0, q);
 }
 
 el.historySearch?.addEventListener('input', () => {
@@ -1497,7 +1558,11 @@ async function loadMeta() {
   try {
     const res = await fetch('/api/transcriptions/meta');
     if (!res.ok) return;
-    const { models, languages, ov_models, ov_available } = await res.json();
+    const { models, languages, ov_models, ov_available, groq_key_set } = await res.json();
+    if (groq_key_set === false) {
+      const groqBtn = document.querySelector('.source-btn[data-value="groq"]');
+      if (groqBtn) { groqBtn.title = 'GROQ_API_KEY is not set — Groq transcription will fail'; groqBtn.style.opacity = '0.45'; }
+    }
     el.languageSelect.innerHTML = languages.map(l =>
       `<option value="${l.code}">${l.label}</option>`).join('');
     el.modelSelect.innerHTML = models.map(m =>

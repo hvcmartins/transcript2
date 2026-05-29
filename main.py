@@ -45,6 +45,11 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_database()
+    if not os.getenv("GROQ_API_KEY"):
+        print(
+            "⚠️  WARNING: GROQ_API_KEY is not set — Groq transcription will fail at runtime.",
+            flush=True,
+        )
     yield
 
 
