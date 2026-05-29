@@ -436,58 +436,27 @@ async function _ensureFfmpeg(onProgress) {
   return _ffmpegInst;
 }
 
-async function _preprocessWithFfmpeg(file, onProgress) {
+// Encode any blob to 16 kHz mono 32 kbps MP3 using ffmpeg.wasm.
+// inputExt should be e.g. 'aac', 'mp3', 'wav' so ffmpeg knows the format.
+// Returns MP3 Blob on success, null on any failure (caller handles fallback).
+async function _encodeToMp3(inputBlob, inputExt, onProgress) {
   if (_ffmpegBusy) return null;
-
-  const ext         = file.name.split('.').pop().toLowerCase();
-  const isMp4       = _MP4_EXTS.has(ext);
-  // For non-MP4 formats we still need to load the whole file into WASM RAM
-  if (!isMp4 && file.size > 500 * 1024 * 1024) return null;
-
   _ffmpegBusy = true;
-  let inputName = isMp4 ? 'input.mp4' : ('input' + (file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : ''));
-
+  const inputName = `input.${inputExt}`;
   try {
     const ff = await _ensureFfmpeg(onProgress);
-
-    // --- For MP4/M4A/MOV: strip video first with mp4box.js ---
-    let inputBlob = file;
-    if (isMp4) {
-      onProgress(5, 'Parsing container…');
-      try {
-        const audioOnly = await _extractMp4Audio(file, onProgress);
-        if (audioOnly) {
-          inputBlob = audioOnly;
-          inputName  = 'input.aac';
-          console.log(`[mp4box] ${formatBytes(file.size)} → ${formatBytes(audioOnly.size)} audio`);
-        }
-      } catch (e) {
-        console.warn('[mp4box] extraction failed, passing full file:', e);
-        if (file.size > 500 * 1024 * 1024) { return null; }  // too large for fallback
-      }
-    }
-
-    if (state.selectedFile !== file) return null;
-
     ff.setProgress(({ ratio }) => {
       if (ratio > 0) onProgress(97 + Math.round(ratio * 2), 'Encoding MP3…');
     });
-
     onProgress(96, 'Encoding MP3…');
     const inputData = new Uint8Array(await inputBlob.arrayBuffer());
-    if (state.selectedFile !== file) return null;
-
     for (const p of [inputName, 'output.mp3']) { try { ff.FS('unlink', p); } catch {} }
     ff.FS('writeFile', inputName, inputData);
-
     await ff.run('-i', inputName, '-vn', '-ar', '16000', '-ac', '1', '-ab', '32k', 'output.mp3');
-    if (state.selectedFile !== file) return null;
-
     const data = ff.FS('readFile', 'output.mp3');
     return new Blob([data.buffer], { type: 'audio/mpeg' });
-
   } catch (err) {
-    console.warn('[ffmpeg] encode failed, falling back to server:', err);
+    console.warn('[ffmpeg] encode failed:', err);
     return null;
   } finally {
     if (_ffmpegInst?.isLoaded()) {
@@ -511,22 +480,68 @@ async function handleFileSelected(file) {
   let uploadFile = file;
   let clientPreprocessed = false;
 
-  if (window.FFmpeg) {
+  const ext   = (file.name.split('.').pop() || '').toLowerCase();
+  const isMp4 = _MP4_EXTS.has(ext);
+
+  if (isMp4 && typeof MP4Box !== 'undefined') {
+    // ── Step 1: extract audio track (pure JS, no WASM/SharedArrayBuffer) ──
+    updateProgress(3, 'Parsing container…', 'preprocess', 0);
+    let audioBlob = null;
+    try {
+      audioBlob = await _extractMp4Audio(file, (pct, label) => {
+        updateProgress(3, label, 'preprocess', pct);
+      });
+    } catch (e) {
+      console.warn('[mp4box] extraction failed:', e);
+    }
+    if (state.selectedFile !== file) return;
+
+    if (audioBlob) {
+      console.log(`[mp4box] ${formatBytes(file.size)} → ${formatBytes(audioBlob.size)} AAC`);
+
+      // ── Step 2: try to encode to MP3 (optional — requires ffmpeg.wasm) ──
+      let mp3Blob = null;
+      if (window.FFmpeg && !_ffmpegBusy) {
+        mp3Blob = await _encodeToMp3(audioBlob, 'aac', (pct, label) => {
+          updateProgress(3, label, 'preprocess', pct);
+        });
+        if (state.selectedFile !== file) return;
+      }
+
+      if (mp3Blob) {
+        const baseName = file.name.slice(0, file.name.lastIndexOf('.')) + '.mp3';
+        uploadFile        = new File([mp3Blob], baseName, { type: 'audio/mpeg' });
+        state.processedSize = mp3Blob.size;
+        clientPreprocessed  = true;
+        console.log(`[ffmpeg] → ${formatBytes(mp3Blob.size)} MP3`);
+      } else {
+        // ffmpeg.wasm unavailable or failed — upload raw AAC (server encodes)
+        const baseName = file.name.slice(0, file.name.lastIndexOf('.')) + '.aac';
+        uploadFile = new File([audioBlob], baseName, { type: 'audio/aac' });
+        console.log('[mp4box] uploading extracted AAC for server-side encoding');
+      }
+    }
+    // If mp4box extraction itself failed, uploadFile stays as the original file.
+    // For huge videos this will be slow but there's no safe alternative.
+
+  } else if (!isMp4 && window.FFmpeg && file.size <= 500 * 1024 * 1024) {
+    // ── Non-video ≤500 MB: full client-side encode ──────────────────────────
     updateProgress(3, 'Preparing audio…', 'preprocess', 0);
-    const mp3Blob = await _preprocessWithFfmpeg(file, (pct, label) => {
+    const mp3Blob = await _encodeToMp3(file, ext || 'audio', (pct, label) => {
       updateProgress(3, label, 'preprocess', pct);
     });
-    if (state.selectedFile !== file) return;  // file replaced while encoding
+    if (state.selectedFile !== file) return;
     if (mp3Blob) {
       const baseName = file.name.includes('.')
         ? file.name.slice(0, file.name.lastIndexOf('.')) + '.mp3'
         : file.name + '.mp3';
-      uploadFile = new File([mp3Blob], baseName, { type: 'audio/mpeg' });
+      uploadFile        = new File([mp3Blob], baseName, { type: 'audio/mpeg' });
       state.processedSize = mp3Blob.size;
-      clientPreprocessed = true;
+      clientPreprocessed  = true;
       console.log(`[ffmpeg] ${formatBytes(file.size)} → ${formatBytes(mp3Blob.size)} MP3`);
     }
   }
+  // else: large non-video or unsupported → upload as-is
 
   updateProgress(3, 'Uploading…', 'preprocess', clientPreprocessed ? 100 : 0);
 
