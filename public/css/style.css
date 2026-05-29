@@ -753,6 +753,7 @@ body { display: flex; min-height: 100vh; }
 
 .history-info { flex: 1; overflow: hidden; cursor: pointer; }
 .history-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px; font-size: 14px; }
+.history-desc { font-size: 12px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
 .history-sub { font-size: 12px; color: var(--text2); display: flex; gap: 10px; flex-wrap: wrap; }
 
 .history-badge {

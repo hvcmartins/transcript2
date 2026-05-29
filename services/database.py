@@ -89,7 +89,7 @@ def get_all_transcriptions(q: str | None = None) -> list[dict]:
         like = f'%{q}%'
         rows = _get_db().execute(
             """SELECT id, filename, original_name, file_size, duration, language,
-                      status, progress, error_msg, model, created_at, updated_at,
+                      status, progress, error_msg, model, description, created_at, updated_at,
                       CASE WHEN lower(transcript) LIKE lower(:like)
                            THEN substr(transcript, max(1, instr(lower(transcript), lower(:q)) - 40), 160)
                            ELSE NULL END as snippet
@@ -101,7 +101,7 @@ def get_all_transcriptions(q: str | None = None) -> list[dict]:
     else:
         rows = _get_db().execute(
             """SELECT id, filename, original_name, file_size, duration, language,
-                      status, progress, error_msg, model, created_at, updated_at
+                      status, progress, error_msg, model, description, created_at, updated_at
                FROM transcriptions ORDER BY created_at DESC"""
         ).fetchall()
     return [dict(r) for r in rows]
