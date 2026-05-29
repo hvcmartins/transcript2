@@ -54,6 +54,8 @@ const el = {
   ovSourceBtn:          $('ovSourceBtn'),
   sourceOptions:        $('sourceOptions'),
   uploadHint:           $('uploadHint'),
+  customName:           $('customName'),
+  customDesc:           $('customDesc'),
   transcribeBtn:        $('transcribeBtn'),
   progressPanel:        $('progressPanel'),
   progressLabel:        $('progressLabel'),
@@ -222,6 +224,9 @@ function _showOptionsAfterPreprocess(duration_s) {
     : '';
   el.optionsPanel.querySelector('.file-icon').textContent =
     getFileIcon(state.selectedFile?.name || '');
+  if (el.customName) el.customName.value = state.selectedFile?.name || '';
+  if (el.customDesc) el.customDesc.value = '';
+  el.dropZone.hidden = true;
   el.optionsPanel.hidden = false;
 }
 
@@ -301,6 +306,7 @@ function clearSelection() {
   state.selectedFile  = null;
   state.preprocessId  = null;
   state.audioDuration = null;
+  el.dropZone.hidden      = false;
   el.optionsPanel.hidden  = true;
   el.progressPanel.hidden = true;
   el.phaseSection.hidden  = true;
@@ -375,6 +381,8 @@ el.transcribeBtn.addEventListener('click', async () => {
   formData.append('model',         el.modelSelect.value     || 'whisper-large-v3-turbo');
   formData.append('source',        src);
   formData.append('ov_model',      el.ovModelSelect.value   || 'small');
+  if (el.customName?.value.trim()) formData.append('custom_name', el.customName.value.trim());
+  if (el.customDesc?.value.trim()) formData.append('description',  el.customDesc.value.trim());
 
   el.optionsPanel.hidden      = true;
   el.progressPanel.hidden     = false;
@@ -592,7 +600,7 @@ async function loadTranscription(id) {
     const confBanner = document.getElementById('confNoBanner');
     if (confBanner) confBanner.hidden = true;
     _syncEditBtn();
-    el.transcriptPlayer.hidden = (player.txId !== id);
+    playerLoad(id);
     showView('transcript');
     clearSelection();
     el.progressPanel.hidden = true;
@@ -639,15 +647,29 @@ function exitEditMode() {
   clearTimeout(state.saveTimer);
   state.editMode = false;
   el.segmentView.classList.remove('edit-mode');
-  player.wordSpans = []; // spans were stripped; karaoke falls back to segment divs
 
-  // Collect edits and persist
   const containers = [...el.segmentView.querySelectorAll('[contenteditable="true"]')];
-  containers.forEach(c => {
+
+  // Capture edited text while still contenteditable, then rebuild HTML
+  // to restore data-conf spans (stripped by enterEditMode).
+  const editedTexts = containers.map(c => c.innerText.replace(/\n/g, ' ').trim());
+  const hasWords = (state.currentData?.words || []).length > 0;
+
+  containers.forEach((c, i) => {
     c.removeEventListener('input', _onEditInput);
     c.removeAttribute('contenteditable');
     c.removeAttribute('spellcheck');
+    // Restore span structure so confidence highlighting works again
+    const seg = (state.currentData?.segments || [])[i];
+    const text = editedTexts[i] || seg?.text || '';
+    if (!hasWords && seg) {
+      const lp = seg.avg_logprob ?? null;
+      const conf = lp == null ? '' : lp < -1.0 ? ' data-conf="low"' : lp < -0.5 ? ' data-conf="mid"' : ' data-conf="high"';
+      c.innerHTML = `<span class="seg-text"${conf}>${escapeHtml(text)}</span>`;
+    }
   });
+
+  player.wordSpans = []; // spans were stripped; karaoke falls back to segment divs
 
   _flushEdits(containers);
   _syncEditBtn();

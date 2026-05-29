@@ -277,6 +277,21 @@ body { display: flex; min-height: 100vh; }
 }
 
 .option-group select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+.option-group--wide { grid-column: 1 / -1; }
+.opt-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  transition: var(--transition);
+  box-sizing: border-box;
+}
+.opt-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+.opt-optional { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text3); }
 
 /* ─── Engine Bar (above upload area) ────────────────────────────────── */
 .engine-bar {

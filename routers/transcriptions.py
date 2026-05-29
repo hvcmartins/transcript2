@@ -86,6 +86,8 @@ async def edit_transcript(id: str, body: dict):
         name = str(body["original_name"]).strip()
         if name:
             fields["original_name"] = name
+    if "description" in body:
+        fields["description"] = str(body["description"])
     if not fields:
         raise HTTPException(status_code=400, detail="Nothing to update")
     update_transcription(id, fields)
@@ -202,6 +204,8 @@ async def create(
     model: str            = Form("whisper-large-v3-turbo"),
     source: str           = Form("groq"),   # "groq" | "openvino"
     ov_model: str         = Form("small"),
+    custom_name: str      = Form(None),     # optional user-provided name override
+    description: str      = Form(None),     # optional description
 ):
     sidecar    = UPLOAD_DIR / f"{preprocess_id}.json"
     audio_path = UPLOAD_DIR / f"{preprocess_id}.mp3"
@@ -218,13 +222,15 @@ async def create(
     shutil.move(str(audio_path), str(tx_path))
 
     record_id = str(uuid.uuid4())
+    final_name = (custom_name or "").strip() or meta["original_name"]
     record = create_transcription({
         "id":            record_id,
         "filename":      tx_filename,
-        "original_name": meta["original_name"],
+        "original_name": final_name,
         "file_size":     meta.get("compressed_size") or meta["original_size"],
         "language":      language,
         "model":         model,
+        "description":   (description or "").strip(),
     })
 
     manager = request.app.state.manager

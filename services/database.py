@@ -51,6 +51,12 @@ def init_database() -> None:
         )
     """)
     db.commit()
+    # Migrate: add description column if absent (safe on existing DBs)
+    try:
+        db.execute("ALTER TABLE transcriptions ADD COLUMN description TEXT DEFAULT ''")
+        db.commit()
+    except Exception:
+        pass
     print(f"📦 Database ready at {DB_PATH}")
 
 
@@ -62,9 +68,10 @@ def create_transcription(data: dict) -> dict:
     db = _get_db()
     db.execute(
         """INSERT INTO transcriptions
-               (id, filename, original_name, file_size, language, model, status)
-           VALUES (:id, :filename, :original_name, :file_size, :language, :model, 'pending')""",
-        data,
+               (id, filename, original_name, file_size, language, model, description, status)
+           VALUES (:id, :filename, :original_name, :file_size, :language, :model,
+                   :description, 'pending')""",
+        {**data, "description": data.get("description", "")},
     )
     db.commit()
     return get_transcription(data["id"])
