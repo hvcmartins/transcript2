@@ -77,7 +77,7 @@ def diarize(audio_path: str, segments: list[dict]) -> list[dict]:
         # Threshold of 0.30: single-speaker recordings routinely score 0.10–0.25
         # due to natural pitch/content variation; genuine multi-speaker audio
         # typically scores >= 0.30.
-        MULTI_SPEAKER_THRESHOLD = 0.25
+        MULTI_SPEAKER_THRESHOLD = 0.23
         best_n, best_score = 2, -1.0
         for n in range(2, min(5, len(features))):
             km = KMeans(n_clusters=n, n_init=10, random_state=42)
