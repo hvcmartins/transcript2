@@ -311,13 +311,22 @@ def _call_groq(client, file_path: str, language: str, model: str) -> dict:
         return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
 
     segments = []
-    for seg in response.segments or []:
+    raw_segs = response.segments or []
+    for seg in raw_segs:
         segments.append({
             "start":       _get(seg, "start", 0),
             "end":         _get(seg, "end",   0),
             "text":        _get(seg, "text",  ""),
             "avg_logprob": _get(seg, "avg_logprob", None),
         })
+    # Log confidence availability so it's visible in container logs
+    lp_vals = [s["avg_logprob"] for s in segments if s["avg_logprob"] is not None]
+    import logging
+    logging.getLogger(__name__).info(
+        "Groq segments=%d  avg_logprob present=%d  sample=%s",
+        len(segments), len(lp_vals),
+        f"{lp_vals[:3]}" if lp_vals else "none"
+    )
 
     words = []
     for w in getattr(response, "words", None) or []:

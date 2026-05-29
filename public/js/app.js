@@ -474,6 +474,10 @@ async function loadTranscription(id) {
     const words       = data.words    || [];
     const hasSpeakers = segments.some(s => s.speaker);
     const hasWords    = words.length > 0;
+    // Track whether confidence data exists at all (separate from whether any words are flagged)
+    const hasConfData = segments.some(s => s.avg_logprob != null)
+                     || words.some(w => w.probability != null);
+    el.segmentView.dataset.hasConf = hasConfData ? 'true' : 'false';
 
     if (segments.length > 0) {
       let lastSpeaker = null;
@@ -840,7 +844,7 @@ el.confToggleBtn?.addEventListener('click', () => {
   el.segmentView.classList.toggle('conf-mode', _confMode);
   el.confToggleBtn.classList.toggle('conf-active', _confMode);
   el.confToggleBtn.title = _confMode ? 'Hide confidence highlighting' : 'Show confidence highlighting';
-  const noData = _confMode && !el.segmentView.querySelector('[data-conf]');
+  const noData = _confMode && el.segmentView.dataset.hasConf !== 'true';
   const banner = document.getElementById('confNoBanner');
   if (banner) banner.hidden = !noData;
 });
