@@ -174,6 +174,75 @@ def _extract_seg_logprobs(captured_logits: list, token_ids: list, tokenizer) -> 
     return seg_logprobs
 
 
+def _parse_tokens_to_segments(
+    token_ids: list,
+    processor,
+    offset_s: float,
+    seg_logprobs: list,
+) -> tuple[list[dict], str]:
+    """
+    Walk the raw Whisper token sequence and return (segments, full_text).
+
+    This replaces batch_decode(output_offsets=True) which only returns one
+    offset entry per timestamp pair and can miss intermediate pairs when the
+    model generates multiple sentence-level boundaries inside one 30-second chunk.
+
+    Whisper timestamp token layout:
+      <|t_start|>  text tokens...  <|t_end|>   (repeat)   <|endoftext|>
+    """
+    ts_begin  = processor.tokenizer.convert_tokens_to_ids("<|0.00|>")
+    eos_id    = processor.tokenizer.eos_token_id
+    time_prec = 0.02  # seconds per timestamp token step
+
+    if ts_begin is None or ts_begin < 0:
+        return [], ""
+
+    segments: list[dict] = []
+    lp_idx = 0
+    i, n = 0, len(token_ids)
+
+    while i < n:
+        tok = token_ids[i]
+        if tok == eos_id:
+            break
+        if tok >= ts_begin:
+            start_time = (tok - ts_begin) * time_prec
+            i += 1
+            text_toks: list[int] = []
+            end_time = start_time + 30.0  # fallback
+            while i < n:
+                tok2 = token_ids[i]
+                if tok2 == eos_id:
+                    break
+                if tok2 >= ts_begin:
+                    end_time = (tok2 - ts_begin) * time_prec
+                    i += 1
+                    break
+                text_toks.append(tok2)
+                i += 1
+            if text_toks:
+                text = processor.tokenizer.decode(
+                    text_toks, skip_special_tokens=True
+                ).strip()
+                if text:
+                    avg_lp = seg_logprobs[lp_idx] if lp_idx < len(seg_logprobs) else None
+                    lp_idx += 1
+                    import math
+                    if avg_lp is not None and not math.isfinite(avg_lp):
+                        avg_lp = None
+                    segments.append({
+                        "start":       round(start_time + offset_s, 3),
+                        "end":         round(end_time   + offset_s, 3),
+                        "text":        text,
+                        "avg_logprob": avg_lp,
+                    })
+        else:
+            i += 1
+
+    full_text = " ".join(s["text"] for s in segments)
+    return segments, full_text
+
+
 def transcribe_openvino(
     file_path: str,
     language: str = "auto",
@@ -204,10 +273,9 @@ def transcribe_openvino(
         progress_cb(38)
 
     # Generation kwargs
-    gen_kwargs: dict = {"return_timestamps": True}
+    gen_kwargs: dict = {"return_timestamps": True, "task": "transcribe"}
     if language and language != "auto":
         gen_kwargs["language"] = language
-        gen_kwargs["task"]     = "transcribe"
 
     # Split into 30-second chunks (Whisper's native input window)
     positions = list(range(0, max(1, len(audio)), _CHUNK))
@@ -243,35 +311,20 @@ def transcribe_openvino(
             ids = model.generate(input_features, **gen_kwargs)
             seg_logprobs = []
 
-        # Decode with timestamp offsets
-        decoded = processor.batch_decode(
-            ids,
-            output_offsets=True,
-            time_precision=0.02,
-            skip_special_tokens=False,
+        # Walk tokens directly — batch_decode(output_offsets=True) collapses all
+        # timestamp pairs in a chunk into a single offset entry, so we get one
+        # 30-second segment per chunk instead of sentence-level breaks.
+        token_ids_for_parse = ids[0].tolist() if hasattr(ids[0], "tolist") else list(ids[0])
+        chunk_segs, chunk_text = _parse_tokens_to_segments(
+            token_ids_for_parse, processor, offset_s, seg_logprobs
         )
-        chunk_result = decoded[0] if decoded else {}
-
-        raw_text    = chunk_result.get("text") or ""
-        raw_offsets = chunk_result.get("offsets") or []
-
-        lp_idx = 0
-        for seg in raw_offsets:
-            ts    = seg.get("offset") or (0.0, 0.0)
-            start = float(ts[0] if ts[0] is not None else 0.0) + offset_s
-            end   = float(ts[1] if ts[1] is not None else start) + offset_s
-            text  = _TS_RE.sub("", seg.get("text") or "").strip()
-            if text:
-                import math
-                avg_lp = seg_logprobs[lp_idx] if lp_idx < len(seg_logprobs) else None
-                if avg_lp is not None and not math.isfinite(avg_lp):
-                    avg_lp = None
-                lp_idx += 1
-                segments.append({"start": start, "end": end, "text": text, "avg_logprob": avg_lp})
-
-        clean = _TS_RE.sub("", raw_text).strip()
-        if clean:
-            text_parts.append(clean)
+        segments.extend(chunk_segs)
+        if chunk_text:
+            text_parts.append(chunk_text)
+        print(
+            f"[openvino] chunk {i}: {len(chunk_segs)} segs from {len(token_ids_for_parse)} tokens",
+            flush=True,
+        )
 
         if progress_cb:
             pct = 38 + int((i + 1) / len(positions) * 45)
