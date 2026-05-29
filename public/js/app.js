@@ -338,52 +338,61 @@ el.dropZone.addEventListener('drop', (e) => {
 // ─── Client-side preprocessing ───────────────────────────────────────────────
 const _MP4_EXTS = new Set(['mp4', 'm4a', 'm4v', 'mov']);
 
+// Sample-rate → ADTS frequency index table (ISO 13818-7 Table 35)
+const _ADTS_FREQ_IDX = {96000:0,88200:1,64000:2,48000:3,44100:4,32000:5,
+                        24000:6,22050:7,16000:8,12000:9,11025:10,8000:11,7350:12};
+
+function _adtsHeader(sampleRate, channels, frameDataBytes) {
+  // 7-byte ADTS header, no CRC (protection_absent = 1)
+  const freqIdx    = _ADTS_FREQ_IDX[sampleRate] ?? 4;   // 4 = 44100 Hz
+  const profile    = 1;                                   // AAC-LC (objectType-1)
+  const frameLen   = 7 + frameDataBytes;
+  const h = new Uint8Array(7);
+  h[0] =  0xFF;
+  h[1] =  0xF1;                                          // MPEG-4, layer=00, no CRC
+  h[2] = (profile << 6) | (freqIdx << 2) | ((channels >> 2) & 1);
+  h[3] = ((channels & 3) << 6) | ((frameLen >> 11) & 3);
+  h[4] =  (frameLen >> 3) & 0xFF;
+  h[5] = ((frameLen  & 7) << 5) | 0x1F;
+  h[6] =  0xFC;
+  return h;
+}
+
 // Extract only the audio track from an MP4/M4A/MOV using mp4box.js.
-// Reads the file in 2 MB chunks — never loads the whole video into RAM.
-// Returns a Blob containing a fragmented MP4 with just the audio track,
-// typically 1–5 % the size of the original video.
+// Reads the file in 2 MB slices — never loads the whole video into RAM.
+// Returns a Blob of raw ADTS-AAC frames (a plain .aac bitstream ffmpeg reads natively).
 async function _extractMp4Audio(file, onProgress) {
   if (typeof MP4Box === 'undefined') return null;
 
   return new Promise((resolve, reject) => {
-    const mp4in  = MP4Box.createFile();
-    let audioId  = null;
-    let totalSmp = 1;
-    const dataBufs = [];
-    let initBuf  = null;
-    let done     = false;
-
-    function _finish() {
-      if (done) return;
-      done = true;
-      if (!initBuf || dataBufs.length === 0) { reject(new Error('No audio data')); return; }
-      const total = initBuf.byteLength + dataBufs.reduce((s, b) => s + b.byteLength, 0);
-      const out = new Uint8Array(total);
-      let pos = 0;
-      out.set(new Uint8Array(initBuf), pos); pos += initBuf.byteLength;
-      for (const b of dataBufs) { out.set(new Uint8Array(b), pos); pos += b.byteLength; }
-      resolve(new Blob([out], { type: 'video/mp4' }));
-    }
+    const mp4in   = MP4Box.createFile();
+    let   audioId = null;
+    let   totalSmp = 1, processedSmp = 0;
+    let   sampleRate = 44100, channels = 2;
+    const chunks  = [];   // alternating [adtsHeader, frameData, ...]
+    let   done    = false;
 
     mp4in.onReady = (info) => {
       const track = (info.audioTracks || []).concat(
         (info.tracks || []).filter(t => t.type === 'audio')
       )[0];
       if (!track) { reject(new Error('No audio track')); return; }
-      audioId  = track.id;
-      totalSmp = track.nb_samples || 1;
-      mp4in.setSegmentOptions(audioId, null, { nbSamples: 1000 });
-      const segs = mp4in.initializeSegmentation();
-      const seg  = segs.find(s => s.id === audioId) || segs[0];
-      if (seg) initBuf = seg.buffer;
+      audioId    = track.id;
+      totalSmp   = track.nb_samples || 1;
+      sampleRate = track.audio?.sample_rate || 44100;
+      channels   = track.audio?.channel_count || 2;
+      mp4in.setExtractionOptions(audioId, null, { nbSamples: 1000 });
       mp4in.start();
     };
 
-    mp4in.onSegment = (id, user, buffer, sampleNum, last) => {
+    mp4in.onSamples = (id, _user, samples) => {
       if (id !== audioId) return;
-      dataBufs.push(buffer);
-      onProgress(30 + Math.round(Math.min(sampleNum, totalSmp) / totalSmp * 65), 'Extracting audio track…');
-      if (last) _finish();
+      for (const s of samples) {
+        chunks.push(_adtsHeader(sampleRate, channels, s.data.byteLength));
+        chunks.push(new Uint8Array(s.data));
+        processedSmp++;
+      }
+      onProgress(30 + Math.round(processedSmp / totalSmp * 65), 'Extracting audio…');
     };
 
     mp4in.onError = (e) => { if (!done) reject(new Error('MP4Box: ' + e)); };
@@ -400,9 +409,13 @@ async function _extractMp4Audio(file, onProgress) {
           const next = mp4in.appendBuffer(buf);
           offset = (typeof next === 'number' && next > offset) ? next : end;
         }
-        mp4in.flush();
-        await Promise.resolve();  // allow synchronous onSegment(last) to fire
-        _finish();                // no-op if already resolved
+        mp4in.flush();          // delivers remaining onSamples synchronously
+        await Promise.resolve();
+        if (!done) {
+          done = true;
+          if (chunks.length === 0) { reject(new Error('No audio frames extracted')); return; }
+          resolve(new Blob(chunks, { type: 'audio/aac' }));
+        }
       } catch (e) {
         if (!done) reject(e);
       }
@@ -432,7 +445,7 @@ async function _preprocessWithFfmpeg(file, onProgress) {
   if (!isMp4 && file.size > 500 * 1024 * 1024) return null;
 
   _ffmpegBusy = true;
-  const inputName = isMp4 ? 'input.mp4' : ('input' + (file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : ''));
+  let inputName = isMp4 ? 'input.mp4' : ('input' + (file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : ''));
 
   try {
     const ff = await _ensureFfmpeg(onProgress);
@@ -445,6 +458,7 @@ async function _preprocessWithFfmpeg(file, onProgress) {
         const audioOnly = await _extractMp4Audio(file, onProgress);
         if (audioOnly) {
           inputBlob = audioOnly;
+          inputName  = 'input.aac';
           console.log(`[mp4box] ${formatBytes(file.size)} → ${formatBytes(audioOnly.size)} audio`);
         }
       } catch (e) {
