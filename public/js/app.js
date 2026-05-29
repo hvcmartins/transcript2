@@ -88,13 +88,8 @@ const el = {
   toastContainer:       $('toastContainer'),
   usageEmpty:           $('usageEmpty'),
   usageData:            $('usageData'),
-  ucReqMetric:          $('ucReqMetric'),
-  ucReqNums:            $('ucReqNums'),
-  ucReqFill:            $('ucReqFill'),
-  ucAudioMetric:        $('ucAudioMetric'),
-  ucAudioNums:          $('ucAudioNums'),
-  ucAudioFill:          $('ucAudioFill'),
-  ucReset:              $('ucReset'),
+  ucModel:              $('ucModel'),
+  ucRows:               $('ucRows'),
   editToggleBtn:        $('editToggleBtn'),
   editIcon:             $('editIcon'),
   saveIcon:             $('saveIcon'),
@@ -1483,6 +1478,34 @@ function _resetLabel(resetStr, label) {
   return '';
 }
 
+function _fmtSeconds(s) {
+  if (s == null) return '—';
+  if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
+  if (s >= 60)   return `${Math.round(s / 60)}m`;
+  return `${s}s`;
+}
+
+function _ucBar(used, limit) {
+  if (limit == null || limit === 0) return 0;
+  return Math.min(100, Math.round((used ?? 0) / limit * 100));
+}
+
+function _ucRow(label, window, used, limit, reset, fmtFn) {
+  const fmt = fmtFn || ((n) => n == null ? '—' : n.toLocaleString());
+  const pct = _ucBar(used, limit);
+  const cls = _usageFillClass(pct);
+  const resetTxt = reset ? _resetLabel(reset, 'Resets') : '';
+  return `<div class="uc-row">
+    <div class="uc-row-head">
+      <span class="uc-label">${label}</span>
+      <span class="uc-window">${window || ''}</span>
+      <span class="uc-nums">${fmt(used)} / ${fmt(limit)}</span>
+    </div>
+    <div class="usage-bar"><div class="usage-fill ${cls}" style="width:${pct}%"></div></div>
+    ${resetTxt ? `<div class="uc-reset">${resetTxt}</div>` : ''}
+  </div>`;
+}
+
 async function loadUsage() {
   try {
     const res = await fetch('/api/usage');
@@ -1493,30 +1516,22 @@ async function loadUsage() {
     el.usageEmpty.hidden = true;
     el.usageData.hidden  = false;
 
-    if (d.requests_limit != null && d.requests_remaining != null) {
-      const used = d.requests_limit - d.requests_remaining;
-      const pct  = Math.min(100, Math.round(used / d.requests_limit * 100));
-      el.ucReqNums.textContent = `${d.requests_remaining.toLocaleString()} / ${d.requests_limit.toLocaleString()} left`;
-      el.ucReqFill.style.width = pct + '%';
-      el.ucReqFill.className   = 'usage-fill ' + _usageFillClass(pct);
-      el.ucReqMetric.hidden    = false;
+    el.ucModel.textContent = d.model || '';
+    el.ucModel.hidden = !d.model;
+
+    const rows = [];
+
+    if (d.requests_limit != null) {
+      rows.push(_ucRow('Requests', d.requests_window, d.requests_used, d.requests_limit, d.requests_reset));
+    }
+    if (d.audio_limit != null) {
+      rows.push(_ucRow('Audio Seconds', d.audio_window, d.audio_used, d.audio_limit, d.audio_reset, _fmtSeconds));
+    }
+    if (d.tokens_limit != null) {
+      rows.push(_ucRow('Tokens', d.tokens_window, d.tokens_used, d.tokens_limit, d.tokens_reset));
     }
 
-    if (d.tokens_limit != null && d.tokens_remaining != null) {
-      const used = d.tokens_limit - d.tokens_remaining;
-      const pct  = Math.min(100, Math.round(used / d.tokens_limit * 100));
-      const fmt  = (s) => s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`;
-      el.ucAudioNums.textContent = `${fmt(d.tokens_remaining)} / ${fmt(d.tokens_limit)} left`;
-      el.ucAudioFill.style.width = pct + '%';
-      el.ucAudioFill.className   = 'usage-fill ' + _usageFillClass(pct);
-      el.ucAudioMetric.hidden    = false;
-    }
-
-    const resets = [
-      _resetLabel(d.requests_reset, 'Daily quota'),
-      _resetLabel(d.tokens_reset,   'Audio quota'),
-    ].filter(Boolean);
-    el.ucReset.textContent = resets[0] || '';
+    el.ucRows.innerHTML = rows.join('');
   } catch (_) {}
 }
 

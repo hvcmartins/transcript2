@@ -175,32 +175,10 @@
         </div>
 
         <div class="usage-data" id="usageData" hidden>
-          <div class="usage-metrics">
-
-            <div class="usage-metric" id="ucReqMetric" hidden>
-              <div class="usage-metric-header">
-                <span class="usage-metric-label">Daily Requests</span>
-                <span class="usage-metric-nums" id="ucReqNums"></span>
-              </div>
-              <div class="usage-track">
-                <div class="usage-fill" id="ucReqFill"></div>
-              </div>
-            </div>
-
-            <div class="usage-metric" id="ucAudioMetric" hidden>
-              <div class="usage-metric-header">
-                <span class="usage-metric-label">Audio / min</span>
-                <span class="usage-metric-nums" id="ucAudioNums"></span>
-              </div>
-              <div class="usage-track">
-                <div class="usage-fill" id="ucAudioFill"></div>
-              </div>
-            </div>
-
-          </div>
+          <div id="ucModel" class="uc-model"></div>
+          <div id="ucRows" class="uc-rows"></div>
           <div class="usage-footer">
-            <span id="ucReset"></span>
-            <span class="usage-note">Live data from API headers · <a href="https://console.groq.com/usage" target="_blank" rel="noopener">Full history ↗</a></span>
+            <span class="usage-note">Live data from API response headers · <a href="https://console.groq.com/usage" target="_blank" rel="noopener">Full stats ↗</a></span>
           </div>
         </div>
       </div>

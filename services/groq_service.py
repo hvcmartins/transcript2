@@ -63,6 +63,16 @@ def _parse_wait_seconds(reset_str: str | None, default: float = 62.0) -> float:
     return total if total > 0 else default
 
 
+def _window(reset_str: str | None) -> str:
+    """Convert a reset duration string to a human window label."""
+    if not reset_str:
+        return ""
+    secs = _parse_wait_seconds(reset_str, default=0)
+    if secs < 120:   return "/min"
+    if secs < 7200:  return "/hour"
+    return "/day"
+
+
 def get_client() -> Groq:
     global _client
     if not _client:
@@ -281,27 +291,60 @@ def _call_groq(client, file_path: str, language: str, model: str) -> dict:
 
     hdrs = raw.headers
 
+    # Collect every x-ratelimit-* header (keys normalised to lowercase)
+    rl: dict[str, str] = {
+        k.lower(): v for k, v in hdrs.items()
+        if k.lower().startswith("x-ratelimit-")
+    }
+
     def _int(key: str) -> int | None:
-        v = hdrs.get(key)
+        v = rl.get(key)
         try:
             return int(v) if v is not None else None
         except (ValueError, TypeError):
             return None
 
-    req_limit     = _int("x-ratelimit-limit-requests")
-    req_remaining = _int("x-ratelimit-remaining-requests")
-    tok_limit     = _int("x-ratelimit-limit-tokens")
-    tok_remaining = _int("x-ratelimit-remaining-tokens")
+    def _str(key: str) -> str | None:
+        return rl.get(key)
+
+    # Requests
+    req_lim   = _int("x-ratelimit-limit-requests")
+    req_rem   = _int("x-ratelimit-remaining-requests")
+    req_reset = _str("x-ratelimit-reset-requests")
+
+    # Audio seconds (whisper-specific)
+    aud_lim   = _int("x-ratelimit-limit-audio-seconds")
+    aud_rem   = _int("x-ratelimit-remaining-audio-seconds")
+    aud_reset = _str("x-ratelimit-reset-audio-seconds")
+
+    # Tokens (may be absent for audio endpoints)
+    tok_lim   = _int("x-ratelimit-limit-tokens")
+    tok_rem   = _int("x-ratelimit-remaining-tokens")
+    tok_reset = _str("x-ratelimit-reset-tokens")
+
+    def _used(lim, rem):
+        return (lim - rem) if (lim is not None and rem is not None) else None
 
     _last_usage = {
-        "requests_limit":     req_limit,
-        "requests_remaining": req_remaining,
-        "requests_used":      (req_limit - req_remaining) if (req_limit is not None and req_remaining is not None) else None,
-        "requests_reset":     hdrs.get("x-ratelimit-reset-requests"),
-        "tokens_limit":       tok_limit,
-        "tokens_remaining":   tok_remaining,
-        "tokens_used":        (tok_limit - tok_remaining) if (tok_limit is not None and tok_remaining is not None) else None,
-        "tokens_reset":       hdrs.get("x-ratelimit-reset-tokens"),
+        "model":              model,
+        # Requests
+        "requests_limit":     req_lim,
+        "requests_remaining": req_rem,
+        "requests_used":      _used(req_lim, req_rem),
+        "requests_reset":     req_reset,
+        "requests_window":    _window(req_reset),
+        # Audio seconds
+        "audio_limit":        aud_lim,
+        "audio_remaining":    aud_rem,
+        "audio_used":         _used(aud_lim, aud_rem),
+        "audio_reset":        aud_reset,
+        "audio_window":       _window(aud_reset),
+        # Tokens
+        "tokens_limit":       tok_lim,
+        "tokens_remaining":   tok_rem,
+        "tokens_used":        _used(tok_lim, tok_rem),
+        "tokens_reset":       tok_reset,
+        "tokens_window":      _window(tok_reset),
         "last_updated":       datetime.now(timezone.utc).isoformat(),
     }
 
