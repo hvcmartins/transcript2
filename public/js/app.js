@@ -330,6 +330,18 @@ el.dropZone.addEventListener('drop', (e) => {
   if (file) handleFileSelected(file);
 });
 
+// Video containers: browser can't extract their audio track via decodeAudioData.
+// Large files: loading into RAM would crash the tab. Both go straight to server.
+const _VIDEO_EXTS    = new Set(['mp4','mkv','avi','mov','flv','wmv','3gp','mpeg','mpg','ts','m2ts']);
+const _MAX_ENCODE_MB = 500;
+
+function _canEncodeInBrowser(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (_VIDEO_EXTS.has(ext)) return false;
+  if (file.size > _MAX_ENCODE_MB * 1024 * 1024) return false;
+  return true;
+}
+
 async function _encodeToMp3(file, onProgress) {
   const arrayBuffer = await file.arrayBuffer();
 
@@ -396,7 +408,7 @@ async function handleFileSelected(file) {
   let uploadFile = file;
   let clientPreprocessed = false;
 
-  if (typeof lamejs !== 'undefined') {
+  if (typeof lamejs !== 'undefined' && _canEncodeInBrowser(file)) {
     updateProgress(3, 'Encoding MP3…', 'preprocess', 0);
     try {
       const mp3Blob = await _encodeToMp3(file, (pct, label) => {
