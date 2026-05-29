@@ -359,68 +359,91 @@ function _adtsHeader(sampleRate, channels, frameDataBytes) {
 }
 
 // Extract only the audio track from an MP4/M4A/MOV using mp4box.js.
-// Reads the file in 2 MB slices — never loads the whole video into RAM.
-// Returns a Blob of raw ADTS-AAC frames (a plain .aac bitstream ffmpeg reads natively).
+//
+// Strategy: parse with discardMdatData=true so mp4box.js skips over the
+// (potentially huge) video mdat and only reads the moov box metadata.
+// Once onReady fires, trak.samples[] is fully populated with file offsets
+// and sizes for every audio frame. We then read each frame via File.slice()
+// — never buffering video data in RAM at all.
 async function _extractMp4Audio(file, onProgress) {
   if (typeof MP4Box === 'undefined') return null;
 
-  return new Promise((resolve, reject) => {
-    const mp4in   = MP4Box.createFile();
-    let   audioId = null;
-    let   totalSmp = 1, processedSmp = 0;
-    let   sampleRate = 44100, channels = 2;
-    const chunks  = [];   // alternating [adtsHeader, frameData, ...]
-    let   done    = false;
+  // ── Phase 1: parse moov (skip mdat entirely) ──────────────────────────────
+  const { sampleRate, channels, samples } = await new Promise((resolve, reject) => {
+    // true = keep mdat data? NO — pass true to createFile means keepMdatData=true
+    // mp4box.createFile(keepMdatData) → discardMdatData = !keepMdatData
+    // We want discardMdatData=true → pass false
+    const mp4in   = MP4Box.createFile(false);  // discardMdatData = true
+    let   settled = false;
 
     mp4in.onReady = (info) => {
+      if (settled) return;
       const track = (info.audioTracks || []).concat(
         (info.tracks || []).filter(t => t.type === 'audio')
       )[0];
-      if (!track) { reject(new Error('No audio track')); return; }
-      audioId    = track.id;
-      totalSmp   = track.nb_samples || 1;
-      sampleRate = track.audio?.sample_rate || 44100;
-      channels   = track.audio?.channel_count || 2;
-      mp4in.setExtractionOptions(audioId, null, { nbSamples: 1000 });
-      mp4in.start();
+      if (!track) { settled = true; reject(new Error('No audio track')); return; }
+
+      // trak.samples is built from moov (stco/stsc/stsz), available immediately
+      const trak = (mp4in.moov?.traks || []).find(t => t.tkhd?.track_id === track.id);
+      if (!trak?.samples?.length) { settled = true; reject(new Error('No samples in moov')); return; }
+
+      settled = true;
+      resolve({
+        sampleRate: track.audio?.sample_rate    || 44100,
+        channels:   track.audio?.channel_count  || 2,
+        samples:    trak.samples,               // [{offset, size, ...}]
+      });
     };
 
-    mp4in.onSamples = (id, _user, samples) => {
-      if (id !== audioId) return;
-      for (const s of samples) {
-        chunks.push(_adtsHeader(sampleRate, channels, s.data.byteLength));
-        chunks.push(new Uint8Array(s.data));
-        processedSmp++;
-      }
-      onProgress(30 + Math.round(processedSmp / totalSmp * 65), 'Extracting audio…');
-    };
-
-    mp4in.onError = (e) => { if (!done) reject(new Error('MP4Box: ' + e)); };
+    mp4in.onError = (e) => { if (!settled) { settled = true; reject(new Error('MP4Box: ' + e)); } };
 
     (async () => {
       try {
         const CHUNK = 2 * 1024 * 1024;
         let offset = 0;
-        while (offset < file.size) {
+        while (!settled && offset < file.size) {
           const end = Math.min(offset + CHUNK, file.size);
           const buf = await file.slice(offset, end).arrayBuffer();
           buf.fileStart = offset;
-          onProgress(Math.round(offset / file.size * 30), 'Parsing container…');
+          onProgress(Math.round(offset / file.size * 15), 'Parsing container…');
           const next = mp4in.appendBuffer(buf);
+          // mp4box skips large mdat boxes and returns the next wanted offset
           offset = (typeof next === 'number' && next > offset) ? next : end;
         }
-        mp4in.flush();          // delivers remaining onSamples synchronously
-        await Promise.resolve();
-        if (!done) {
-          done = true;
-          if (chunks.length === 0) { reject(new Error('No audio frames extracted')); return; }
-          resolve(new Blob(chunks, { type: 'audio/aac' }));
+        if (!settled) {
+          mp4in.flush();
+          await Promise.resolve();
+          if (!settled) { settled = true; reject(new Error('moov not found')); }
         }
       } catch (e) {
-        if (!done) reject(e);
+        if (!settled) { settled = true; reject(e); }
       }
     })();
   });
+
+  // ── Phase 2: read audio frame bytes via File.slice (no video data touched) ─
+  const total = samples.length;
+  if (total === 0) throw new Error('No audio samples');
+
+  const BATCH  = 256;    // concurrent File.slice reads per tick
+  const chunks = [];
+
+  for (let i = 0; i < total; i += BATCH) {
+    const batch = samples.slice(i, Math.min(i + BATCH, total));
+    const bufs  = await Promise.all(
+      batch.map(s => file.slice(s.offset, s.offset + s.size).arrayBuffer())
+    );
+    for (const buf of bufs) {
+      if (buf.byteLength === 0) continue;
+      chunks.push(_adtsHeader(sampleRate, channels, buf.byteLength));
+      chunks.push(new Uint8Array(buf));
+    }
+    onProgress(15 + Math.round((i + batch.length) / total * 80), 'Extracting audio…');
+    await new Promise(r => setTimeout(r, 0));  // yield to keep UI responsive
+  }
+
+  if (chunks.length === 0) throw new Error('No audio frames extracted');
+  return new Blob(chunks, { type: 'audio/aac' });
 }
 
 let _ffmpegInst = null;
