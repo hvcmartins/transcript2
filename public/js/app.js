@@ -504,13 +504,13 @@ async function loadTranscription(id) {
               ? ' ' + w.word : w.word;
             let confAttr = '';
             if (w.probability != null) {
-              // Per-word probability 0–1
               if (w.probability < 0.50) confAttr = ' data-conf="low"';
               else if (w.probability < 0.75) confAttr = ' data-conf="mid"';
+              else confAttr = ' data-conf="high"';
             } else if (segLogp != null) {
-              // Segment avg_logprob — tightened so Groq's ~-0.31 baseline doesn't trigger
               if (segLogp < -1.0) confAttr = ' data-conf="low"';
               else if (segLogp < -0.5) confAttr = ' data-conf="mid"';
+              else confAttr = ' data-conf="high"';
             }
             whtml += `<span class="word" data-s="${w.start}" data-e="${w.end}"${confAttr}>${escapeHtml(text)}</span>`;
             wordIdx++;
@@ -522,6 +522,7 @@ async function loadTranscription(id) {
           if (lp != null) {
             if (lp < -1.0) segConf = ' data-conf="low"';
             else if (lp < -0.5) segConf = ' data-conf="mid"';
+            else segConf = ' data-conf="high"';
           }
           bodyHtml = `<span class="seg-text"${segConf}>${escapeHtml(seg.text.trim())}</span>`;
         }
