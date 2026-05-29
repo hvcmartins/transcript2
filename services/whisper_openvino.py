@@ -85,12 +85,34 @@ _TS_RE = re.compile(r"<\|[\d.]+\|>")
 _CHUNK = 30 * 16000   # 30 s at 16 kHz
 
 
-def _extract_seg_logprobs(output, tokenizer) -> list:
+class _LogitCapture:
     """
-    Walk the scored generate() output and return one avg_logprob per
-    timestamp-delimited segment (matching the order batch_decode returns).
+    A transformers LogitsProcessor that saves raw logits at each non-forced
+    generation step.  Passed via logits_processor= — no need for
+    return_dict_in_generate, so it works with OVModelForSpeechSeq2Seq.
+    """
+    def __init__(self):
+        self.captured: list = []
 
-    Whisper token layout (after forced prefix):
+    def __call__(self, input_ids, scores):
+        import numpy as np
+        s = scores[0]  # batch 0
+        if hasattr(s, "numpy"):
+            arr = s.numpy()
+        elif hasattr(s, "detach"):
+            arr = s.detach().numpy()
+        else:
+            arr = np.asarray(s)
+        self.captured.append(arr.astype(np.float32))
+        return scores
+
+
+def _extract_seg_logprobs(captured_logits: list, token_ids: list, tokenizer) -> list:
+    """
+    Given per-step raw logits and the full token sequence (including forced prefix),
+    return one avg_logprob per timestamp-delimited segment.
+
+    Whisper layout after the forced prefix:
       <|t_start|> text_tok... <|t_end|> <|t_start|> text_tok... <|t_end|> ...
 
     We average log-P(text tokens) within each pair and skip timestamp tokens.
@@ -98,8 +120,7 @@ def _extract_seg_logprobs(output, tokenizer) -> list:
     """
     import numpy as np
 
-    scores = getattr(output, "scores", None)
-    if not scores:
+    if not captured_logits:
         return []
 
     try:
@@ -107,26 +128,14 @@ def _extract_seg_logprobs(output, tokenizer) -> list:
     except AttributeError:
         return []
 
-    # sequences[0]: full token ID list including forced prefix
-    seqs = output.sequences
-    token_ids = seqs[0].tolist() if hasattr(seqs[0], "tolist") else list(seqs[0])
-    num_forced = len(token_ids) - len(scores)
+    num_forced = len(token_ids) - len(captured_logits)
     if num_forced < 0:
         return []
 
     # Compute log-prob of the chosen token at each generation step
     token_logprobs: list[tuple[int, float]] = []
-    for step, (score_t, tok_id) in enumerate(zip(scores, token_ids[num_forced:])):
-        # score_t: (batch, vocab) — take batch 0
-        logits = score_t[0]
-        if hasattr(logits, "numpy"):
-            logits = logits.numpy()
-        elif hasattr(logits, "detach"):
-            logits = logits.detach().numpy()
-        else:
-            logits = np.asarray(logits)
+    for step, (logits, tok_id) in enumerate(zip(captured_logits, token_ids[num_forced:])):
         logits = logits.astype(np.float64)
-        # numerically stable log-softmax
         shifted = logits - logits.max()
         lp = shifted[tok_id] - np.log(np.sum(np.exp(shifted)))
         token_logprobs.append((tok_id, float(lp)))
@@ -206,13 +215,20 @@ def transcribe_openvino(
             chunk, sampling_rate=16000, return_tensors="pt"
         ).input_features
 
-        # Try to get per-token scores for confidence extraction
-        scored_kwargs = {**gen_kwargs, "output_scores": True, "return_dict_in_generate": True}
+        # Capture per-token logits for confidence extraction via a LogitsProcessor
+        # hook — more compatible with OVModelForSpeechSeq2Seq than return_dict_in_generate.
+        from transformers import LogitsProcessorList
+        capture = _LogitCapture()
         try:
-            output = model.generate(input_features, **scored_kwargs)
-            ids = output.sequences
-            seg_logprobs = _extract_seg_logprobs(output, processor.tokenizer)
-        except Exception:
+            ids = model.generate(
+                input_features,
+                **gen_kwargs,
+                logits_processor=LogitsProcessorList([capture]),
+            )
+            token_ids = ids[0].tolist() if hasattr(ids[0], "tolist") else list(ids[0])
+            seg_logprobs = _extract_seg_logprobs(capture.captured, token_ids, processor.tokenizer)
+        except Exception as exc:
+            print(f"[openvino] logit capture failed ({type(exc).__name__}: {exc}), retrying plain", flush=True)
             ids = model.generate(input_features, **gen_kwargs)
             seg_logprobs = []
 
