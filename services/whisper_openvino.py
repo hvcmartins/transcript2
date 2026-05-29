@@ -96,6 +96,8 @@ class _LogitCapture:
 
     def __call__(self, input_ids, scores):
         import numpy as np
+        if len(self.captured) == 0:
+            print(f"[openvino-dbg] _LogitCapture first call: scores type={type(scores)} shape={getattr(scores, 'shape', '?')}", flush=True)
         s = scores[0]  # batch 0
         if hasattr(s, "numpy"):
             arr = s.numpy()
@@ -120,24 +122,23 @@ def _extract_seg_logprobs(captured_logits: list, token_ids: list, tokenizer) -> 
     """
     import numpy as np
 
+    print(f"[openvino-dbg] _extract called: captured={len(captured_logits)} token_ids={len(token_ids)}", flush=True)
+
     if not captured_logits:
+        print("[openvino-dbg] early-return: no captured logits", flush=True)
         return []
 
     try:
         ts_begin = tokenizer.timestamp_begin
     except AttributeError:
+        print("[openvino-dbg] early-return: no timestamp_begin attr", flush=True)
         return []
 
     num_forced = len(token_ids) - len(captured_logits)
+    print(f"[openvino-dbg] num_forced={num_forced} ts_begin={ts_begin} non_forced={token_ids[num_forced:num_forced+12]}", flush=True)
     if num_forced < 0:
+        print("[openvino-dbg] early-return: num_forced<0", flush=True)
         return []
-
-    print(
-        f"[openvino-dbg] captured={len(captured_logits)} total_toks={len(token_ids)}"
-        f" num_forced={num_forced} ts_begin={ts_begin}"
-        f" non_forced_toks={token_ids[num_forced:num_forced+12]}",
-        flush=True,
-    )
 
     # Compute log-prob of the chosen token at each generation step
     token_logprobs: list[tuple[int, float]] = []
