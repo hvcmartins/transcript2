@@ -132,6 +132,13 @@ def _extract_seg_logprobs(captured_logits: list, token_ids: list, tokenizer) -> 
     if num_forced < 0:
         return []
 
+    print(
+        f"[openvino-dbg] captured={len(captured_logits)} total_toks={len(token_ids)}"
+        f" num_forced={num_forced} ts_begin={ts_begin}"
+        f" non_forced_toks={token_ids[num_forced:num_forced+12]}",
+        flush=True,
+    )
+
     # Compute log-prob of the chosen token at each generation step
     token_logprobs: list[tuple[int, float]] = []
     for step, (logits, tok_id) in enumerate(zip(captured_logits, token_ids[num_forced:])):
