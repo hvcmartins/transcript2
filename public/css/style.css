@@ -1189,6 +1189,42 @@ body { display: flex; min-height: 100vh; }
 }
 .hist-retranscribe:hover { border-color: var(--accent); color: var(--accent2); background: rgba(59,130,246,.07); }
 
+/* ─── Speaker rename panel ───────────────────────────────────────────── */
+#speakerPanel[hidden] { display: none; }
+#speakerPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 32px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+}
+.spk-panel-hd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text3);
+}
+.spk-rows { display: flex; flex-wrap: wrap; gap: 10px 24px; }
+.spk-row  { display: flex; align-items: center; gap: 8px; }
+.spk-arrow { color: var(--text3); font-size: 13px; line-height: 1; }
+.spk-rename-input {
+  width: 150px;
+  padding: 5px 9px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  transition: var(--transition);
+}
+.spk-rename-input:focus { border-color: var(--accent); }
+
 /* ─── Find & Replace bar ─────────────────────────────────────────────── */
 #findReplaceBar[hidden] { display: none; }
 #findReplaceBar {

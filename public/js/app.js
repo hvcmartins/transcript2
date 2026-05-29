@@ -24,6 +24,7 @@ const state = {
   saveTimer:              null,
   savePending:            false,
   transcriptOrigin:       'upload',  // 'upload' | 'history'
+  speakerMap:             {},        // original name → renamed value (cleared on load)
 };
 
 // ─── Audio Player ─────────────────────────────────────────────────────────────
@@ -469,6 +470,7 @@ function secondsToHMMSS(s) {
 
 async function loadTranscription(id, origin = 'upload') {
   state.transcriptOrigin = origin;
+  state.speakerMap = {};
   try {
     const res = await fetch(`/api/transcriptions/${id}`);
     if (!res.ok) throw new Error('Not found');
@@ -544,7 +546,7 @@ async function loadTranscription(id, origin = 'upload') {
         if (hasSpeakers && seg.speaker) {
           const spkClass  = 'spk-' + seg.speaker.slice(-1).toLowerCase();
           const badgeHtml = seg.speaker !== lastSpeaker
-            ? `<span class="seg-speaker ${spkClass}">${escapeHtml(seg.speaker)}</span>` : '';
+            ? `<span class="seg-speaker ${spkClass}" data-original="${escapeHtml(seg.speaker)}">${escapeHtml(seg.speaker)}</span>` : '';
           lastSpeaker = seg.speaker;
           div.innerHTML = `${timeHtml}<div class="seg-content">${badgeHtml}<span class="seg-words">${bodyHtml}</span></div>`;
         } else {
@@ -627,6 +629,63 @@ function _syncEditBtn() {
   if (el.frReplaceAll) el.frReplaceAll.disabled = !state.editMode;
 }
 
+function _buildSpeakerPanel() {
+  const panel = document.getElementById('speakerPanel');
+  const rowsEl = document.getElementById('speakerRows');
+  if (!panel || !rowsEl) return;
+
+  const segments = state.currentData?.segments || [];
+  const seen = new Set();
+  const speakers = [];
+  for (const seg of segments) {
+    if (seg.speaker && !seen.has(seg.speaker)) { seen.add(seg.speaker); speakers.push(seg.speaker); }
+  }
+  if (speakers.length === 0) return;
+
+  rowsEl.innerHTML = '';
+  speakers.forEach(original => {
+    const spkClass = 'spk-' + original.slice(-1).toLowerCase();
+    const row = document.createElement('div');
+    row.className = 'spk-row';
+    row.innerHTML =
+      `<span class="seg-speaker ${spkClass}">${escapeHtml(original)}</span>` +
+      `<span class="spk-arrow">→</span>` +
+      `<input class="spk-rename-input" type="text" placeholder="${escapeHtml(original)}" ` +
+      `value="${escapeHtml(state.speakerMap[original] || '')}" data-original="${escapeHtml(original)}">`;
+    rowsEl.appendChild(row);
+    row.querySelector('.spk-rename-input').addEventListener('input', e => {
+      const orig = e.target.dataset.original;
+      state.speakerMap[orig] = e.target.value;
+      const display = e.target.value.trim() || orig;
+      el.segmentView.querySelectorAll('.seg-speaker').forEach(badge => {
+        if (badge.dataset.original === orig) badge.textContent = display;
+      });
+    });
+  });
+
+  panel.hidden = false;
+}
+
+function _applySpeakerRenames() {
+  if (!state.currentData?.segments) return;
+  const map = state.speakerMap;
+  const hasRenames = Object.values(map).some(v => v.trim());
+  if (!hasRenames) return;
+
+  // Commit renamed labels back into data-original so re-entry works correctly
+  el.segmentView.querySelectorAll('.seg-speaker').forEach(badge => {
+    const newName = (map[badge.dataset.original] || '').trim();
+    if (newName) { badge.textContent = newName; badge.dataset.original = newName; }
+  });
+
+  state.currentData.segments = state.currentData.segments.map(seg => {
+    const newName = (map[seg.speaker] || '').trim();
+    return newName ? { ...seg, speaker: newName } : seg;
+  });
+
+  state.speakerMap = {};
+}
+
 function enterEditMode() {
   if (state.editMode) return;
   state.editMode = true;
@@ -641,6 +700,7 @@ function enterEditMode() {
     container.addEventListener('input', _onEditInput);
   });
 
+  _buildSpeakerPanel();
   _syncEditBtn();
 }
 
@@ -672,6 +732,11 @@ function exitEditMode() {
   });
 
   player.wordSpans = []; // spans were stripped; karaoke falls back to segment divs
+
+  // Commit speaker renames into state before _flushEdits so they are included in the PATCH
+  _applySpeakerRenames();
+  const spkPanel = document.getElementById('speakerPanel');
+  if (spkPanel) spkPanel.hidden = true;
 
   _flushEdits(containers);
   _syncEditBtn();
