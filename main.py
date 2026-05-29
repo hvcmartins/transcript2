@@ -3,7 +3,8 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from routers import transcriptions, exports
@@ -55,6 +56,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, redirect_slashes=False)
 app.state.manager = manager
+
+
+# ── Cross-origin isolation (required for SharedArrayBuffer / ffmpeg.wasm) ────
+class _COIMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Cross-Origin-Opener-Policy"]   = "same-origin"
+        response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+        return response
+
+app.add_middleware(_COIMiddleware)
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
