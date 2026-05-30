@@ -336,7 +336,7 @@ el.dropZone.addEventListener('drop', (e) => {
 });
 
 // ─── Client-side preprocessing ───────────────────────────────────────────────
-const _MP4_EXTS = new Set(['mp4', 'm4a', 'm4v', 'mov']);
+const _MP4_EXTS = new Set(['mp4', 'm4v', 'mov']);  // m4a is audio-only, no extraction needed
 
 // Sample-rate → ADTS frequency index table (ISO 13818-7 Table 35)
 const _ADTS_FREQ_IDX = {96000:0,88200:1,64000:2,48000:3,44100:4,32000:5,
