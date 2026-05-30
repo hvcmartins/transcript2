@@ -327,24 +327,25 @@ def _call_groq(client, file_path: str, language: str, model: str) -> dict:
 
     _last_usage = {
         "model":              model,
-        # Requests
+        # Requests — x-ratelimit-limit-requests is always RPD per Groq docs
         "requests_limit":     req_lim,
         "requests_remaining": req_rem,
         "requests_used":      _used(req_lim, req_rem),
         "requests_reset":     req_reset,
-        "requests_window":    _window(req_reset),
-        # Audio seconds
+        "requests_window":    "/day",
+        # Audio seconds — window derived from reset time (hourly and daily limits exist)
         "audio_limit":        aud_lim,
         "audio_remaining":    aud_rem,
         "audio_used":         _used(aud_lim, aud_rem),
         "audio_reset":        aud_reset,
         "audio_window":       _window(aud_reset),
-        # Tokens
+        # Tokens — x-ratelimit-limit-tokens is always TPM per Groq docs
         "tokens_limit":       tok_lim,
         "tokens_remaining":   tok_rem,
         "tokens_used":        _used(tok_lim, tok_rem),
         "tokens_reset":       tok_reset,
-        "tokens_window":      _window(tok_reset),
+        "tokens_window":      "/min",
+        "raw_headers":        dict(rl),
         "last_updated":       datetime.now(timezone.utc).isoformat(),
     }
 

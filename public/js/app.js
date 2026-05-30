@@ -1688,12 +1688,25 @@ el.selectAllCheck.addEventListener('change', () => {
 // ─── Groq API Usage Card ──────────────────────────────────────────────────────
 let _ucCountdownTimer = null;
 
-// Convert a Groq reset header value (seconds string or ISO timestamp) → abs ms
+// Parse Groq duration strings like "2m59.56s", "7.66s", "1h30m" → seconds
+function _parseResetDuration(v) {
+  let total = 0;
+  const re = /(\d+(?:\.\d+)?)([hms])/g;
+  let m;
+  while ((m = re.exec(v)) !== null) {
+    total += parseFloat(m[1]) * ({ h: 3600, m: 60, s: 1 }[m[2]]);
+  }
+  return total > 0 ? total : null;
+}
+
+// Convert a Groq reset header value (duration string, plain seconds, or ISO timestamp) → abs ms
 function _resetToAbsMs(v) {
   if (!v) return null;
   const n = Number(v);
   if (!isNaN(n) && n >= 0) return Date.now() + n * 1000;
-  try { const t = new Date(v); if (!isNaN(t)) return t.getTime(); } catch (_) {}
+  try { const t = new Date(v); if (!isNaN(t.getTime())) return t.getTime(); } catch (_) {}
+  const secs = _parseResetDuration(v);
+  if (secs !== null) return Date.now() + secs * 1000;
   return null;
 }
 
@@ -1740,6 +1753,42 @@ function _startUcCountdown() {
   }, 1000);
 }
 
+// Known window labels per Groq API docs (overrides heuristic)
+const _METRIC_WINDOW = { requests: '/day', tokens: '/min' };
+// Display order and friendly labels
+const _METRIC_ORDER  = ['requests', 'audio-seconds', 'tokens'];
+const _METRIC_LABEL  = { requests: 'Requests', 'audio-seconds': 'Audio', tokens: 'Tokens' };
+
+function _windowFromReset(resetStr) {
+  const secs = _parseResetDuration(resetStr);
+  if (secs == null) return '';
+  if (secs < 120)  return '/min';
+  if (secs < 7200) return '/hour';
+  return '/day';
+}
+
+function _rowsFromRawHeaders(h) {
+  const metrics = new Set(
+    Object.keys(h)
+      .map(k => k.match(/^x-ratelimit-limit-(.+)$/)?.[1])
+      .filter(Boolean),
+  );
+  const ordered = [
+    ..._METRIC_ORDER.filter(m => metrics.has(m)),
+    ...[...metrics].filter(m => !_METRIC_ORDER.includes(m)).sort(),
+  ];
+  return ordered.map(metric => {
+    const limit = parseInt(h[`x-ratelimit-limit-${metric}`]);
+    if (isNaN(limit)) return '';
+    const rem   = parseInt(h[`x-ratelimit-remaining-${metric}`]);
+    const reset = h[`x-ratelimit-reset-${metric}`];
+    const win   = _METRIC_WINDOW[metric] ?? _windowFromReset(reset);
+    const label = _METRIC_LABEL[metric] ?? metric.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const fmt   = metric === 'audio-seconds' ? _fmtSeconds : null;
+    return _ucRow(label, win, isNaN(rem) ? null : rem, limit, reset, fmt);
+  }).join('');
+}
+
 async function loadUsage() {
   try {
     const res = await fetch('/api/usage');
@@ -1753,15 +1802,20 @@ async function loadUsage() {
     el.ucModel.textContent = d.model || '';
     el.ucModel.hidden = !d.model;
 
-    const rows = [];
-    if (d.requests_limit != null)
-      rows.push(_ucRow('Requests', d.requests_window, d.requests_remaining, d.requests_limit, d.requests_reset));
-    if (d.audio_limit != null)
-      rows.push(_ucRow('Audio', d.audio_window, d.audio_remaining, d.audio_limit, d.audio_reset, _fmtSeconds));
-    if (d.tokens_limit != null)
-      rows.push(_ucRow('Tokens', d.tokens_window, d.tokens_remaining, d.tokens_limit, d.tokens_reset));
+    if (d.raw_headers && Object.keys(d.raw_headers).length) {
+      el.ucRows.innerHTML = _rowsFromRawHeaders(d.raw_headers);
+    } else {
+      // Fallback to structured fields for older responses
+      const rows = [];
+      if (d.requests_limit != null)
+        rows.push(_ucRow('Requests', d.requests_window, d.requests_remaining, d.requests_limit, d.requests_reset));
+      if (d.audio_limit != null)
+        rows.push(_ucRow('Audio', d.audio_window, d.audio_remaining, d.audio_limit, d.audio_reset, _fmtSeconds));
+      if (d.tokens_limit != null)
+        rows.push(_ucRow('Tokens', d.tokens_window, d.tokens_remaining, d.tokens_limit, d.tokens_reset));
+      el.ucRows.innerHTML = rows.join('');
+    }
 
-    el.ucRows.innerHTML = rows.join('');
     _startUcCountdown();
   } catch (_) {}
 }
