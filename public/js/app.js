@@ -336,7 +336,15 @@ el.dropZone.addEventListener('drop', (e) => {
 });
 
 // ─── Client-side preprocessing ───────────────────────────────────────────────
-const _MP4_EXTS = new Set(['mp4', 'm4v', 'mov']);  // m4a is audio-only, no extraction needed
+
+// Audio-only formats — never run mp4box video extraction on these.
+const _AUDIO_EXTS = new Set([
+  'mp3', 'wav', 'flac', 'ogg', 'oga', 'opus', 'aac',
+  'm4a', 'm4b', 'weba', 'wma', 'amr', 'ape', 'alac',
+]);
+
+// MP4-family video containers that may need audio-track extraction.
+const _MP4_EXTS = new Set(['mp4', 'm4v', 'mov']);
 
 // Sample-rate → ADTS frequency index table (ISO 13818-7 Table 35)
 const _ADTS_FREQ_IDX = {96000:0,88200:1,64000:2,48000:3,44100:4,32000:5,
@@ -503,8 +511,8 @@ async function handleFileSelected(file) {
   let uploadFile = file;
   let clientPreprocessed = false;
 
-  const ext   = (file.name.split('.').pop() || '').toLowerCase();
-  const isMp4 = _MP4_EXTS.has(ext);
+  const ext        = (file.name.split('.').pop() || '').toLowerCase();
+  const isMp4      = _MP4_EXTS.has(ext) && !_AUDIO_EXTS.has(ext);
 
   if (isMp4 && typeof MP4Box !== 'undefined') {
     // ── Step 1: extract audio track (pure JS, no WASM/SharedArrayBuffer) ──
