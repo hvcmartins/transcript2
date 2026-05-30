@@ -88,6 +88,60 @@ def get_last_usage() -> dict:
     return _last_usage
 
 
+def fetch_rate_limits() -> dict:
+    """
+    Make a lightweight models-list call to populate rate-limit headers without
+    consuming transcription quota.  Merges into _last_usage, preserving any
+    audio-seconds data already set by a real transcription.
+    Returns _last_usage (possibly unchanged on error).
+    """
+    global _last_usage
+    try:
+        client = get_client()
+        raw = client.models.with_raw_response.list()
+        rl: dict[str, str] = {
+            k.lower(): v for k, v in raw.headers.items()
+            if k.lower().startswith("x-ratelimit-")
+        }
+        if not rl:
+            return _last_usage
+
+        def _int(key: str) -> int | None:
+            v = rl.get(key)
+            try: return int(v) if v is not None else None
+            except (ValueError, TypeError): return None
+
+        req_lim   = _int("x-ratelimit-limit-requests")
+        req_rem   = _int("x-ratelimit-remaining-requests")
+        req_reset = rl.get("x-ratelimit-reset-requests")
+        tok_lim   = _int("x-ratelimit-limit-tokens")
+        tok_rem   = _int("x-ratelimit-remaining-tokens")
+        tok_reset = rl.get("x-ratelimit-reset-tokens")
+
+        def _used(lim, rem):
+            return (lim - rem) if (lim is not None and rem is not None) else None
+
+        merged = dict(_last_usage)
+        merged.update({
+            "requests_limit":     req_lim,
+            "requests_remaining": req_rem,
+            "requests_used":      _used(req_lim, req_rem),
+            "requests_reset":     req_reset,
+            "requests_window":    "/day",
+            "tokens_limit":       tok_lim,
+            "tokens_remaining":   tok_rem,
+            "tokens_used":        _used(tok_lim, tok_rem),
+            "tokens_reset":       tok_reset,
+            "tokens_window":      "/min",
+            "raw_headers":        {**merged.get("raw_headers", {}), **dict(rl)},
+            "last_updated":       datetime.now(timezone.utc).isoformat(),
+        })
+        _last_usage = merged
+    except Exception:
+        pass
+    return _last_usage
+
+
 # ── Audio preprocessing ───────────────────────────────────────────────────────
 def get_audio_duration(file_path: str) -> float | None:
     """Use ffprobe to get audio/video duration in seconds."""

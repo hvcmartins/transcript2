@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from routers import transcriptions, exports
 from services.database import init_database
-from services.groq_service import get_last_usage
+from services.groq_service import get_last_usage, fetch_rate_limits
 
 # ── Directories ──────────────────────────────────────────────────────────────
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
@@ -103,8 +103,12 @@ async def health():
 
 @app.get("/api/usage")
 async def usage():
-    """Return the Groq rate-limit info captured from the most recent API call."""
-    return get_last_usage()
+    """Return Groq rate-limit info. Fetches live headers if no data is cached yet."""
+    data = get_last_usage()
+    if not data.get("last_updated"):
+        import asyncio
+        data = await asyncio.to_thread(fetch_rate_limits)
+    return data
 
 
 # ── Static frontend (must come last) ─────────────────────────────────────────
