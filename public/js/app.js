@@ -91,6 +91,7 @@ const el = {
   usageData:            $('usageData'),
   ucModel:              $('ucModel'),
   ucRows:               $('ucRows'),
+  usageRefreshBtn:      $('usageRefreshBtn'),
   editToggleBtn:        $('editToggleBtn'),
   editIcon:             $('editIcon'),
   saveIcon:             $('saveIcon'),
@@ -1684,33 +1685,25 @@ el.selectAllCheck.addEventListener('change', () => {
   updateBulkBar();
 });
 
-// ─── Groq API Usage Bar ───────────────────────────────────────────────────────
-function _usageFillClass(pct) {
-  if (pct >= 90) return 'crit';
-  if (pct >= 70) return 'warn';
-  return '';
+// ─── Groq API Usage Card ──────────────────────────────────────────────────────
+let _ucCountdownTimer = null;
+
+// Convert a Groq reset header value (seconds string or ISO timestamp) → abs ms
+function _resetToAbsMs(v) {
+  if (!v) return null;
+  const n = Number(v);
+  if (!isNaN(n) && n >= 0) return Date.now() + n * 1000;
+  try { const t = new Date(v); if (!isNaN(t)) return t.getTime(); } catch (_) {}
+  return null;
 }
 
-function _resetLabel(resetStr, label) {
-  if (!resetStr) return '';
-  const asNum = Number(resetStr);
-  if (!isNaN(asNum)) {
-    const diff = Math.max(0, Math.round(asNum));
-    if (diff <= 0) return `${label} resets now`;
-    const m = Math.floor(diff / 60), s = diff % 60;
-    return m > 0 ? `${label} resets in ${m}m ${s}s` : `${label} resets in ${s}s`;
-  }
-  try {
-    const ts = new Date(resetStr);
-    if (!isNaN(ts)) {
-      const diff = Math.max(0, Math.round((ts - Date.now()) / 1000));
-      if (diff <= 0) return `${label} resets now`;
-      const m = Math.floor(diff / 60), s = diff % 60;
-      if (diff > 3600) return `${label} resets in ${Math.round(diff/3600)}h`;
-      return m > 0 ? `${label} resets in ${m}m ${s}s` : `${label} resets in ${s}s`;
-    }
-  } catch (_) {}
-  return '';
+function _resetText(absMs) {
+  if (!absMs) return '';
+  const s = Math.max(0, Math.round((absMs - Date.now()) / 1000));
+  if (s === 0) return 'Resets now';
+  if (s > 3600) return `Resets in ${Math.round(s / 3600)}h`;
+  const m = Math.floor(s / 60), r = s % 60;
+  return m > 0 ? `Resets in ${m}m ${r}s` : `Resets in ${r}s`;
 }
 
 function _fmtSeconds(s) {
@@ -1720,25 +1713,31 @@ function _fmtSeconds(s) {
   return `${s}s`;
 }
 
-function _ucBar(used, limit) {
-  if (limit == null || limit === 0) return 0;
-  return Math.min(100, Math.round((used ?? 0) / limit * 100));
-}
-
-function _ucRow(label, window, used, limit, reset, fmtFn) {
-  const fmt = fmtFn || ((n) => n == null ? '—' : n.toLocaleString());
-  const pct = _ucBar(used, limit);
-  const cls = _usageFillClass(pct);
-  const resetTxt = reset ? _resetLabel(reset, 'Resets') : '';
+function _ucRow(label, win, remaining, limit, reset, fmtFn) {
+  const fmt  = fmtFn || ((n) => (n == null ? '—' : n.toLocaleString()));
+  const pct  = (limit && remaining != null) ? Math.min(100, Math.round((1 - remaining / limit) * 100)) : 0;
+  const cls  = pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : '';
+  const resetAt = _resetToAbsMs(reset);
   return `<div class="uc-row">
     <div class="uc-row-head">
-      <span class="uc-label">${label}</span>
-      <span class="uc-window">${window || ''}</span>
-      <span class="uc-nums">${fmt(used)} / ${fmt(limit)}</span>
+      <span class="uc-label">${label}</span>${win ? `<span class="uc-window">${win}</span>` : ''}
+      <span class="uc-remaining ${cls}">${fmt(remaining)} left</span>
     </div>
-    <div class="usage-bar"><div class="usage-fill ${cls}" style="width:${pct}%"></div></div>
-    ${resetTxt ? `<div class="uc-reset">${resetTxt}</div>` : ''}
+    <div class="usage-track"><div class="usage-fill ${cls}" style="width:${pct}%"></div></div>
+    <div class="uc-row-foot">
+      <span class="uc-used">${fmt(remaining)} of ${fmt(limit)} remaining</span>
+      ${resetAt ? `<span class="uc-reset" data-reset-at="${resetAt}">${_resetText(resetAt)}</span>` : ''}
+    </div>
   </div>`;
+}
+
+function _startUcCountdown() {
+  if (_ucCountdownTimer) return;
+  _ucCountdownTimer = setInterval(() => {
+    document.querySelectorAll('.uc-reset[data-reset-at]').forEach(el => {
+      el.textContent = _resetText(+el.dataset.resetAt);
+    });
+  }, 1000);
 }
 
 async function loadUsage() {
@@ -1755,20 +1754,19 @@ async function loadUsage() {
     el.ucModel.hidden = !d.model;
 
     const rows = [];
-
-    if (d.requests_limit != null) {
-      rows.push(_ucRow('Requests', d.requests_window, d.requests_used, d.requests_limit, d.requests_reset));
-    }
-    if (d.audio_limit != null) {
-      rows.push(_ucRow('Audio Seconds', d.audio_window, d.audio_used, d.audio_limit, d.audio_reset, _fmtSeconds));
-    }
-    if (d.tokens_limit != null) {
-      rows.push(_ucRow('Tokens', d.tokens_window, d.tokens_used, d.tokens_limit, d.tokens_reset));
-    }
+    if (d.requests_limit != null)
+      rows.push(_ucRow('Requests', d.requests_window, d.requests_remaining, d.requests_limit, d.requests_reset));
+    if (d.audio_limit != null)
+      rows.push(_ucRow('Audio', d.audio_window, d.audio_remaining, d.audio_limit, d.audio_reset, _fmtSeconds));
+    if (d.tokens_limit != null)
+      rows.push(_ucRow('Tokens', d.tokens_window, d.tokens_remaining, d.tokens_limit, d.tokens_reset));
 
     el.ucRows.innerHTML = rows.join('');
+    _startUcCountdown();
   } catch (_) {}
 }
+
+el.usageRefreshBtn?.addEventListener('click', () => loadUsage());
 
 // ─── Engine (source) selector ─────────────────────────────────────────────────
 function getSource() {
