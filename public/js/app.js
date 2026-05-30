@@ -88,6 +88,7 @@ const el = {
   apiStatus:            $('apiStatus'),
   toastContainer:       $('toastContainer'),
   usageEmpty:           $('usageEmpty'),
+  usageEmptyMsg:        $('usageEmptyMsg'),
   usageData:            $('usageData'),
   ucModel:              $('ucModel'),
   ucRows:               $('ucRows'),
@@ -1794,7 +1795,16 @@ async function loadUsage() {
     const res = await fetch('/api/usage');
     if (!res.ok) return;
     const d = await res.json();
-    if (!d.last_updated) return;
+    if (!d.last_updated) {
+      // Backend tried but got no rate-limit headers (endpoint doesn't expose them)
+      // or there was an error — show appropriate message
+      if (el.usageEmptyMsg) {
+        el.usageEmptyMsg.textContent = d.fetch_status === 'error'
+          ? 'Could not reach Groq API — check your API key and connection.'
+          : 'Usage data appears here after your first Groq transcription.';
+      }
+      return;
+    }
 
     el.usageEmpty.hidden = true;
     el.usageData.hidden  = false;

@@ -93,7 +93,8 @@ def fetch_rate_limits() -> dict:
     Make a lightweight models-list call to populate rate-limit headers without
     consuming transcription quota.  Merges into _last_usage, preserving any
     audio-seconds data already set by a real transcription.
-    Returns _last_usage (possibly unchanged on error).
+    Returns _last_usage on success; {"fetch_status": "no_headers"} if the endpoint
+    returned no rate-limit headers; {"fetch_status": "error", "error": str} on failure.
     """
     global _last_usage
     try:
@@ -104,7 +105,7 @@ def fetch_rate_limits() -> dict:
             if k.lower().startswith("x-ratelimit-")
         }
         if not rl:
-            return _last_usage
+            return {"fetch_status": "no_headers"}
 
         def _int(key: str) -> int | None:
             v = rl.get(key)
@@ -137,8 +138,8 @@ def fetch_rate_limits() -> dict:
             "last_updated":       datetime.now(timezone.utc).isoformat(),
         })
         _last_usage = merged
-    except Exception:
-        pass
+    except Exception as exc:
+        return {"fetch_status": "error", "error": str(exc)}
     return _last_usage
 
 
